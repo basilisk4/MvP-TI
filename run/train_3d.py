@@ -260,7 +260,8 @@ def main():
                 precision = None
 
                 if 'panoptic' in config.DATASET.TEST_DATASET \
-                        or 'h36m' in config.DATASET.TEST_DATASET:
+                        or 'h36m' in config.DATASET.TEST_DATASET\
+                        or 'pop3d' in config.DATASET.TEST_DATASET:
                     tb = PrettyTable()
                     mpjpe_threshold = np.arange(25, 155, 25)
                     aps, recs, mpjpe, recall500 = \
