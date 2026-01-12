@@ -1,13 +1,16 @@
-import cv2 
-import pandas as pd
-import subprocess
+import cv2
+import numpy as np
+from segment_anything import SamPredictor, sam_model_registry
+from torch import cuda
 import os
 import json
 import shutil
 from tqdm import tqdm
 import argparse
 import sys
-sys.path.append("repositories/Dataset-3DPOP")
+sys.path.append("Utils")
+from SegmentUtil import segment
+sys.path.append("Utils/Dataset-3DPOP")
 from POP3D_Reader import Trial
 
 def parse_args():
@@ -17,12 +20,38 @@ def parse_args():
     default_path=os.path.join(os.path.dirname(__file__),'pop3d')
     parser.add_argument('--out', default=default_path,
                         help='Path where training dataset is created')
+    parser.add_argument('--seg', default=False,
+                        help='Choose whether the dataset should be segmented')
+    parser.add_argument('--sam', default="models/sam_vit_h_4b8939.pth",
+                        help='Path to the SAM model weights (vit_h)')
     args, rest = parser.parse_known_args()
     return args
+  
 
-def main(pop3d_path, out_path):
+def createDataset(pop3d_path, out_path, sam_ckpt):
+  """Creates a training dataset from 3D-POP for MvP in the format of the panoptic dataset. 
+    The sampled N6000 folder of the 3D-POP dataset is used.
+
+    Parameters
+    ----------
+    pop3d_path : str
+        The Path to the 3D-POP dataset
+    out_path : str
+        The path where the dataset is created this path must not exist
+    sam_ckpt : str
+        The path to the segment anything (SAM) checkpoint(vit_h). If set to None, the images are not segmented
+    Returns
+    -------
+    numpy.ndarray
+        The segmented frame
+    """
   data_path=os.path.join(pop3d_path,"N6000")
   keypoints=["hd_beak", "hd_leftEye", "hd_rightEye", "hd_nose", "bp_leftShoulder", "bp_rightShoulder", "bp_topKeel", "bp_bottomKeel", "bp_tail"]
+
+  if not sam_ckpt==None:
+    sam = sam_model_registry["vit_h"](checkpoint=sam_ckpt)
+    sam.to(device="cuda" if cuda.is_available() else "cpu")
+    samPredictor = SamPredictor(sam)
 
   for typ in ["Train", "Test"]:
     print("Creating "+typ+" dataset...")
@@ -34,6 +63,7 @@ def main(pop3d_path, out_path):
       path=""     
       seq=""
       for cam in anno["CameraData"]:
+        # copy image
         name=cam["CamName"]
         path=cam["Path"].split("/")[-1]
         seq=path.split("-")[0]
@@ -41,8 +71,16 @@ def main(pop3d_path, out_path):
         os.makedirs(out_dir, exist_ok=True)
         img_source=os.path.join(data_path,typ,name,path)
         img_dest=os.path.join(out_dir,path)    
-        shutil.copy(img_source, img_dest)
+        # segment if necessary
+        if not sam_ckpt==None:
+          bboxes=np.array(list(cam["BBox"].values()))
+          frame=cv2.imread(img_source)
+          frame=segment(samPredictor,frame,bboxes)
+          cv2.imwrite(img_dest, frame)
+        else:
+          shutil.copy(img_source, img_dest)
 
+      # create annotation file 
       frameList=[]
       gt_keypoints=anno["Keypoint3D"]
       for ind in anno["BirdID"]:
@@ -60,7 +98,8 @@ def main(pop3d_path, out_path):
       json_path=os.path.join(anno_dir,json_name)
       with open(json_path, "w") as fp:
         json.dump(frameDict , fp)
-
+        
+      # create camera calibration file
       calib_path=os.path.join(out_path, seq+"-"+typ,"calibration_"+seq+"-"+typ+".json")
       if not os.path.isfile(calib_path):
         SequenceNum=seq.split("Sequence")[1].split("_")[0]
@@ -82,12 +121,16 @@ def main(pop3d_path, out_path):
         CamDict={"cameras":CamParamList}
         with open(calib_path, "w") as fp:
           json.dump(CamDict , fp) 
+      
   print("done.")
 
 
 if __name__ == '__main__':
   args = parse_args()
-  main(args.path, args.out)
+  sam_ckpt=None
+  if args.seg:
+    sam_ckpt=args.sam
+  createDataset(args.path, args.out,sam_ckpt)
 
       
       

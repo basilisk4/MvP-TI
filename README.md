@@ -1,14 +1,97 @@
-# Implementation of NeurIPS-2021 paper: Direct Multi-view Multi-person 3D Human Pose Estimation 
-# [[paper](https://arxiv.org/pdf/2111.04076.pdf)] [[video-YouTube](https://www.youtube.com/watch?v=dBT4SO2ve0c), [video-Bilibili](https://www.bilibili.com/video/BV1sL4y1v7wy/)] [[slides](https://drive.google.com/file/d/1NJeAYTbbV3ohXaYcUM7up-qITp37pvf6/view)]
+# MvP-TI
+This repository is a fork of the [Multi-view Pose Transformer (MvP)](https://github.com/sail-sg/mvp).
 
-This is the official implementation of our NeurIPS-2021 work: Multi-view Pose Transformer (MvP). **MvP is a simple algorithm that directly regresses multi-person 3D human pose from multi-view images.**
+It extends the original implementation to investigate texture-independent multi-view 3D pose estimation for birds. As part of this work, the [3D-POP](https://github.com/alexhang212/dataset-3dpop) dataset has been added, together with evaluation code to evaluate identical to [3D-MuPPET-TI](https://github.com/basilisk4/3D-MuPPET-TI).
 
-**:star::star::star:[News] A Re-implementation is integrated into **xrmocap**: at https://github.com/openxrlab/xrmocap**
 
-## Framework
-![mvp_framework](https://github.com/sail-sg/mvp/blob/main/figures/mvp_framework.png)
-## Example Result
-![mvp_framework](https://github.com/sail-sg/mvp/blob/main/figures/example_qualitative_result.png)
+
+## 0. System
+The easiest way to run this project is by using the official NVIDIA PyTorch Docker image.
+Make sure you have [Docker](https://docs.docker.com/engine/install/) and [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) installed so the container can access your GPU.
+
+
+```bash
+docker login nvcr.io
+docker pull nvcr.io/nvidia/pytorch:20.07-py3
+docker run --gpus all -it --rm nvcr.io/nvidia/pytorch:20.07-py3
+```
+
+
+
+## 1. Installation
+1. Set the project root directory as ${POSE_ROOT}.
+2. Install all the required python packages (with requirements.txt).
+3. compile deformable operation for projective attention.
+```bash
+cd ./models/ops
+sh ./make.sh
+cd ../..
+```
+
+## 2. Data and Pre-trained Model Preparation
+To use MvP on CMU Panoptic, Shelf/Campus, Human3.6M datasets refer to the original [MvP repository](https://github.com/sail-sg/mvp).
+
+### 2.1 Model
+Please follow [VoxelPose](https://github.com/microsoft/voxelpose-pytorch?tab=readme-ov-file#cmu-panoptic-dataset) to download the PoseResNet-50 pre-trained model. Also download the [Sam vit_h](https://github.com/facebookresearch/segment-anything?tab=readme-ov-file#model-checkpoints)  model checkpoint.
+
+### 2.2 3D-POP
+
+Download the [3D-Pop dataset](https://edmond.mpg.de/dataset.xhtml?persistentId=doi:10.17617/3.HPBBC7) anywhere on your system. You can only download the N6000 folder as well as Sequences 1, 2, 5 and 11. TAfter that clone the 3D-POP-Dataset repository and activate the SAM conda enviroment. The SAM conda enviroment is only needed for dataset creation.
+```
+git clone https://github.com/alexhang212/Dataset-3DPOP.git ./Utils
+conda env create -f sam.yml
+conda activate SAM
+```
+Create the training datasets:
+```
+python ./data/createPop3d.py --path=3D-POP-PATH --out=./data/pop3d
+python ./data/createPop3d.py --path=3D-POP-PATH --out=./data/pop3d-seg --seg=True
+```
+Create the evaluation datasets:
+```
+python ./data/createPop3d-eval.py --path=3D-POP-PATH --out=./data/pop3d-eval
+python ./data/createPop3d-eval.py --path=3D-POP-PATH --out=./data/pop3d-eval-seg --seg=True
+```
+The directory tree should look like this:
+```
+${POSE_ROOT}
+|-- models
+|   |-- pose_resnet50_panoptic.pth.tar
+|   |-- sam_vit_h_4b8939.pth
+|-- data
+|   |-- pop3d
+|   |-- pop3d-seg
+|   |-- pop3d-eval
+|   |-- pop3d-eval-seg
+```
+
+
+
+## 3. Training and Evaluation
+The evaluation result will be printed after every epoch, the best result can be found in the log. For the 3D-POP trainings dataset:
+
+```
+python -m torch.distributed.launch --nproc_per_node=4 --use_env run/train_3d.py --cfg configs/pop3d/best_model_config.yaml
+```
+ And for the segmented 3D-POP trainings dataset:
+
+```
+python -m torch.distributed.launch --nproc_per_node=4 --use_env run/train_3d.py --cfg configs/pop3d-seg/best_model_config.yaml
+```
+
+## 4. Evaluation
+
+To evaluate a trained model on the evaluation dataset, pass the name, config, the path to the evaluation dataset(data) and the path to the 3D-POP dataset. For our set-up that results in this command:
+
+```
+python ./evaluation/evaluation.py --name=MvP --cfg=configs/pop3d/best_model_config.yaml --data=data/pop3d-eval  --dataset=3D-POP-PATH  
+
+```
+And for the segmented version:
+```
+python ./evaluation/evaluation.py --name=MvP-seg --cfg=configs/pop3d-seg/best_model_config.yaml --data=data/pop3d-eval-seg  --dataset=3D-POP-PATH 
+
+```
 
 ## Reference
 ```
@@ -20,190 +103,5 @@ This is the official implementation of our NeurIPS-2021 work: Multi-view Pose Tr
 }
 ```
 
-## 1. Installation
-1. Set the project root directory as ${POSE_ROOT}.
-2. Install all the required python packages (with requirements.txt).
-3. compile deformable operation for projective attention.
-```bash
-cd ./models/ops
-sh ./make.sh
-```
-
-## 2. Data and Pre-trained Model Preparation
-
-### 2.1 CMU Panoptic
-Please follow [VoxelPose](https://github.com/microsoft/voxelpose-pytorch) to download 
-the CMU Panoptic Dataset and PoseResNet-50 pre-trained model.
-
-The directory tree should look like this:
-```
-${POSE_ROOT}
-|-- models
-|   |-- pose_resnet50_panoptic.pth.tar
-|-- data
-|   |-- panoptic
-|   |   |-- 16060224_haggling1
-|   |   |   |-- hdImgs
-|   |   |   |-- hdvideos
-|   |   |   |-- hdPose3d_stage1_coco19
-|   |   |   |-- calibration_160224_haggling1.json
-|   |   |-- 160226_haggling1
-|   |   |-- ...
-```
-
-### 2.2 Shelf/Campus
-Please follow [VoxelPose](https://github.com/microsoft/voxelpose-pytorch) to download 
-the Shelf/Campus Dataset. 
-
-Due to the limited and incomplete annotations of the two datasets, we use psudo 
-ground truth 3D pose generated from VoxelPose to train the model, we expect mvp would 
-perform much better with absolute ground truth pose data. 
-
-Please use voxelpose or other methods to generate psudo ground truth for the training set,
-you can also use our generated psudo GT: 
-[psudo_gt_shelf](https://drive.google.com/file/d/1eVauegbdLuPHK7KsS3SqkCSsFWvgSeBY/view?usp=sharing). 
-[psudo_gt_campus](https://drive.google.com/file/d/1RA3V5RpRiZ3EnA4_HYAUY6Ut7mIW7PMS/view?usp=sharing). 
-[psudo_gt_campus_fix_gtmorethanpred](https://drive.google.com/file/d/1doHxMvmInq0aCdN6zqLl59QRJOTWY0zw/view?usp=sharing). 
-
-
-Due to the small dataset size, we fine-tune Panoptic pre-trained model to Shelf and Campus.
-Download the pretrained MvP on Panoptic from 
-[model_best_5view](https://drive.google.com/file/d/1kW2KJPvA6t4oOhcLtK_XE63jMGurF1Vb/view?usp=sharing) and 
-[model_best_3view_horizontal_view](https://drive.google.com/file/d/1SBEzjWvyObpk1KFgT85JZ9RVSxFySOJN/view?usp=sharing) or 
-[model_best_3view_2horizon_1lookdown](https://drive.google.com/file/d/1lrnm6WrshSVqv5HbzLKS7q19Begui6gA/view?usp=sharing)
-
-The directory tree should look like this:
-```
-${POSE_ROOT}
-|-- models
-|   |-- model_best_5view.pth.tar
-|   |-- model_best_3view_horizontal_view.pth.tar
-|   |-- model_best_3view_2horizon_1lookdown.pth.tar
-|-- data
-|   |-- Shelf
-|   |   |-- Camera0
-|   |   |-- ...
-|   |   |-- Camera4
-|   |   |-- actorsGT.mat
-|   |   |-- calibration_shelf.json
-|   |   |-- pesudo_gt
-|   |   |   |-- voxelpose_pesudo_gt_shelf.pickle
-|   |-- CampusSeq1
-|   |   |-- Camera0
-|   |   |-- Camera1
-|   |   |-- Camera2
-|   |   |-- actorsGT.mat
-|   |   |-- calibration_campus.json
-|   |   |-- pesudo_gt
-|   |   |   |-- voxelpose_pesudo_gt_campus.pickle
-|   |   |   |-- voxelpose_pesudo_gt_campus_fix_gtmorethanpred_case.pickle
-```
-
-### 2.3 Human3.6M dataset
-Please follow [CHUNYUWANG/H36M-Toolbox](https://github.com/CHUNYUWANG/H36M-Toolbox) to prepare the data.
-
-
-### 2.4 Full Directory Tree
-
-The data and pre-trained model directory tree should look like this, you can only download
-the Panoptic dataset and PoseResNet-50 for reproducing the main MvP result and ablation studies:
-
-```
-${POSE_ROOT}
-|-- models
-|   |-- pose_resnet50_panoptic.pth.tar
-|   |-- model_best_5view.pth.tar
-|   |-- model_best_3view_horizontal_view.pth.tar
-|   |-- model_best_3view_2horizon_1lookdown.pth.tar
-|-- data
-|   |-- pesudo_gt
-|   |   |-- voxelpose_pesudo_gt_shelf.pickle
-|   |   |-- voxelpose_pesudo_gt_campus.pickle
-|   |   |-- voxelpose_pesudo_gt_campus_fix_gtmorethanpred_case.pickle
-|   |-- panoptic
-|   |   |-- 16060224_haggling1
-|   |   |   |-- hdImgs
-|   |   |   |-- hdvideos
-|   |   |   |-- hdPose3d_stage1_coco19
-|   |   |   |-- calibration_160224_haggling1.json
-|   |   |-- 160226_haggling1
-|   |   |-- ...
-|   |-- Shelf
-|   |   |-- Camera0
-|   |   |-- ...
-|   |   |-- Camera4
-|   |   |-- actorsGT.mat
-|   |   |-- calibration_shelf.json
-|   |   |-- pesudo_gt
-|   |   |   |-- voxelpose_pesudo_gt_shelf.pickle
-|   |-- CampusSeq1
-|   |   |-- Camera0
-|   |   |-- Camera1
-|   |   |-- Camera2
-|   |   |-- actorsGT.mat
-|   |   |-- calibration_campus.json
-|   |   |-- pesudo_gt
-|   |   |   |-- voxelpose_pesudo_gt_campus.pickle
-|   |   |   |-- voxelpose_pesudo_gt_campus_fix_gtmorethanpred_case.pickle
-|   |-- HM36
-```
-
-
-
-## 3. Training and Evaluation
-The evaluation result will be printed after every epoch, the best result can be found in the log.
-
-### 3.1 CMU Panoptic dataset
-
-We train and validate on the five selected camera views. We trained our models on 8 GPUs and batch_size=1 for each GPU, note the total iteration per epoch should be `3205`, if not, please check your data.
-```
-python -m torch.distributed.launch --nproc_per_node=8 --use_env run/train_3d.py --cfg configs/panoptic/best_model_config.yaml
-```
-
-#### Pre-trained models
-
-| Datasets    |  AP<sub>25</sub> |  AP<sub>25</sub> |  AP<sub>25</sub> | AP<sub>25</sub> | MPJPE | pth | 
-| :---        |   :---:    |  :---: |  :---:  |  :---:  | :---:  | :---:  |
-| Panoptic    |    92.3    |  96.6  |  97.5   | 97.7    | 15.8   | [here](https://drive.google.com/file/d/1kW2KJPvA6t4oOhcLtK_XE63jMGurF1Vb/view?usp=sharing) |
-
-
-#### 3.1.1 Ablation Experiments
-
-You can find several ablation experiment configs under `./configs/panoptic/`, for example, removing RayConv:
-
-```
-python -m torch.distributed.launch --nproc_per_node=8 --use_env run/train_3d.py --cfg configs/panoptic/ablation_remove_rayconv.yaml
-```
-
-### 3.2 Shelf/Campus datasets
-
-As shelf/campus are very small dataset with incomplete annotation, we finetune pretrained MvP with pseudo ground truth 3D pose extracted with VoxelPose, we expect more accurate GT would help MvP achieve much higher performance.
-
-```
-python -m torch.distributed.launch --nproc_per_node=8 --use_env run/train_3d.py --cfg configs/shelf/mvp_shelf.yaml
-```
-
-#### Pre-trained models
-| Datasets    |  Actor 1 |  Actor 2 |  Actor 2 | Average | pth | 
-| :---        |   :---:  |  :---:   |  :---:   |  :---:  |:---:|
-| Shelf       |   99.3   |  95.1    |  97.8    | 97.4 | [here](https://drive.google.com/file/d/1WjM9B4BqRPIkoh-x250kmDIPhqw8GDZ_/view?usp=sharing) |
-| Campus      |   98.2   |  94.1    |  97.4    | 96.6 | [here](https://github.com/sail-sg/volo/releases/download/volo_1/d1_384_85.2.pth.tar) |
-
-
-### 3.3 Human3.6M dataset
-MvP also applies to the naive single-person setting, with dataset like Human3.6, to come
-```
-python -m torch.distributed.launch --nproc_per_node=8 --use_env run/train_3d.py --cfg configs/h36m/mvp_h36m.yaml
-```
-
-## 4. Evaluation Only
-
-To evaluate a trained model, pass the config and model pth:
-
-```
-python -m torch.distributed.launch --nproc_per_node=8 --use_env run/validate_3d.py --cfg xxx --model_path xxx
-```
-
-
-### LICENSE
+## LICENSE
 This repo is under the Apache-2.0 license. For commercial use, please contact the authors.
