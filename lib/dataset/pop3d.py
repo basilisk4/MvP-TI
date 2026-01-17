@@ -82,7 +82,7 @@ class Pop3d (JointsDataset):
                             :self.num_views]
             self.num_views = len(self.cam_list)
         elif self.image_set == 'validation':
-            self.sequence_list = [d for d in os.listdir(self.dataset_root) if d.endswith("Test")]
+            self.sequence_list = [d for d in os.listdir(self.dataset_root) if d.endswith("Val")]
             self._interval = 1
             self.cam_list = ["Cam1","Cam2","Cam3","Cam4"][
                             :self.num_views]

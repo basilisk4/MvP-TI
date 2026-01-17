@@ -53,7 +53,7 @@ def createDataset(pop3d_path, out_path, sam_ckpt):
     sam.to(device="cuda" if cuda.is_available() else "cpu")
     samPredictor = SamPredictor(sam)
 
-  for typ in ["Train", "Test"]:
+  for typ in ["Train", "Val"]:
     print("Creating "+typ+" dataset...")
     anno_path=os.path.join(data_path,"Annotation", typ+"-3D.json")
     with open(anno_path, 'r') as file:

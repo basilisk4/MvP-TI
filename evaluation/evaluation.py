@@ -57,10 +57,10 @@ def VizualizeAll(path,Point3DDict, Lines = True):
         Points3DArr = np.array(Subject[:, :3])
         PointsNames = list(["hd_beak", "hd_leftEye", "hd_rightEye", "hd_nose", "bp_leftShoulder", "bp_rightShoulder", "bp_topKeel", "bp_bottomKeel", "bp_tail"])
         # import ipdb;ipdb.set_trace()
-        #try:
-        Allimgpts, jac = cv2.projectPoints(Points3DArr, VisCam['R'], VisCam["t"], VisCam['K'], VisCam['distCoef'])
-        #except:
-            #continue
+        try:
+            Allimgpts, jac = cv2.projectPoints(Points3DArr, VisCam['R'], VisCam["t"], VisCam['K'], VisCam['distCoef'])
+        except:
+            continue
 
         for i in range(len(Allimgpts)):
             pts = Allimgpts[i]
@@ -114,6 +114,7 @@ def select_preds(preds, n):
         coordinates=pred[:,:3]
         distances=pdist(coordinates)
         size=np.max(distances)
+        print(size)
         if size<250:
             filtered_preds.append(pred)
     
@@ -280,11 +281,10 @@ if __name__ == "__main__":
     seq_dict={}
     
     ModelName='MvP'
-    out_path=os.path.join('/media/valentin/Project/MvP-TI/evaluation',ModelName)
-    image_path=os.path.join(out_path,'Images')
+    image_path=os.path.join(OutDir,'Images')
     os.makedirs(image_path)
     
-    result_path=os.path.join(out_path,'results.p')
+    result_path=os.path.join(OutDir,'results.p')
     cmd = [
     "python",
     "-m", "torch.distributed.launch",
@@ -317,7 +317,7 @@ if __name__ == "__main__":
     for seq, framedict in seq_dict.items(): 
         print("Match and export Sequence "+str(seq))    
         matched_dict=match_preds(framedict,ind_dict[seq]) 
-        export_results(matched_dict,seq,ModelName,out_path,VisCam) 
+        export_results(matched_dict,seq,ModelName,OutDir,VisCam) 
         seq_dict[seq]= matched_dict
         
     applyKalman(OutDir,evalSeqs, ModelName)

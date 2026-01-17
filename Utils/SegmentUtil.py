@@ -42,16 +42,10 @@ def segment(samPredictor,frame,bboxes):
             multimask_output=False,  # Only return the most confident mask
         )
         mask_bw = ((masks[0]) * 255).astype(np.uint8)
-        # Find all connected components (white areas)
-        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask_bw, connectivity=4)
-        # Identify the largest white area (ignoring the background, which is label 0)
-        largest_label = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])
-        # Create a mask for the largest component
-        mask_isolated = (labels == largest_label).astype(np.uint8) * 255
         # pad to original size
         pad_tb=[tl[1],h-(tl[1]+1023)]
         pad_lr=[tl[0],w-(tl[0]+1023)]
-        mask_bw=np.pad(mask_isolated, (pad_tb,pad_lr), constant_values=((0,0),(0,0)))
+        mask_bw=np.pad(mask_bw, (pad_tb,pad_lr), constant_values=((0,0),(0,0)))
         #merge masks
         out_frame=np.maximum(out_frame,mask_bw)
-        return out_frame
+    return out_frame

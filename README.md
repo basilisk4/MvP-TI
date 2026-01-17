@@ -32,11 +32,11 @@ cd ../..
 To use MvP on CMU Panoptic, Shelf/Campus, Human3.6M datasets refer to the original [MvP repository](https://github.com/sail-sg/mvp).
 
 ### 2.1 Model
-Please follow [VoxelPose](https://github.com/microsoft/voxelpose-pytorch?tab=readme-ov-file#cmu-panoptic-dataset) to download the PoseResNet-50 pre-trained model. Also download the [Sam vit_h](https://github.com/facebookresearch/segment-anything?tab=readme-ov-file#model-checkpoints)  model checkpoint.
+Please follow [VoxelPose](https://github.com/microsoft/voxelpose-pytorch?tab=readme-ov-file#cmu-panoptic-dataset) to download the PoseResNet-50 pre-trained model. Also download the [Sam vit_h](https://github.com/facebookresearch/segment-anything?tab=readme-ov-file#model-checkpoints)  model checkpoint. For evaluation donwload the [YOLO_Barn model](https://zenodo.org/records/10453890) used by [3D-MuPPET](https://github.com/alexhang212/3D-MuPPET)
 
 ### 2.2 3D-POP
 
-Download the [3D-Pop dataset](https://edmond.mpg.de/dataset.xhtml?persistentId=doi:10.17617/3.HPBBC7) anywhere on your system. You can only download the N6000 folder as well as Sequences 1, 2, 5 and 11. TAfter that clone the 3D-POP-Dataset repository and activate the SAM conda enviroment. The SAM conda enviroment is only needed for dataset creation.
+Download the [3D-Pop dataset](https://edmond.mpg.de/dataset.xhtml?persistentId=doi:10.17617/3.HPBBC7) anywhere on your system. You can only download the N6000 folder as well as Sequences 1, 2, 5 and 11. After that clone the 3D-POP-Dataset repository and activate the SAM conda enviroment. The SAM conda enviroment is only needed for dataset creation. The dataset creation can also be performed on another machine if that is more convinient.
 ```
 git clone https://github.com/alexhang212/Dataset-3DPOP.git ./Utils
 conda env create -f sam.yml
@@ -58,6 +58,7 @@ ${POSE_ROOT}
 |-- models
 |   |-- pose_resnet50_panoptic.pth.tar
 |   |-- sam_vit_h_4b8939.pth
+|   |-- YOLO_Barn.pt
 |-- data
 |   |-- pop3d
 |   |-- pop3d-seg
