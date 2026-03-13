@@ -110,7 +110,8 @@ def train_3d(config, model, optimizer, loader, epoch,
         batch_time.update(time_synchronized() - end)
         end = time_synchronized()
 
-        if i % config.PRINT_FREQ == 0 and is_main_process():
+        if ((i+1) % config.PRINT_FREQ == 0 or i+1 == len(loader)) \
+                    and is_main_process():
             gpu_memory_usage = torch.cuda.memory_allocated(0)
             msg = \
                 'Epoch: [{0}][{1}/{2}]\t' \
@@ -130,7 +131,7 @@ def train_3d(config, model, optimizer, loader, epoch,
                 '({cardinality_error.avg:.6f})\t' \
                 'Memory {memory:.1f}\t'\
                 'gradnorm {gradnorm:.2f}'.format(
-                  epoch, i, len(loader),
+                  epoch+1, i+1, len(loader),
                   batch_time=batch_time,
                   speed=len(inputs) * inputs[0].size(0) / batch_time.val,
                   data_time=data_time,
@@ -153,6 +154,10 @@ def validate_3d(config, model, loader, output_dir, threshold, num_views=5):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     model.eval()
+    
+    loss_ce = AverageMeter()
+    loss_pose_perjoint = AverageMeter()
+    loss_pose_perprojection = AverageMeter()
 
     preds = []
     meta_image_files = []
@@ -162,7 +167,13 @@ def validate_3d(config, model, loader, output_dir, threshold, num_views=5):
             data_time.update(time.time() - end)
             assert len(inputs) == num_views
 
-            output = model(views=inputs, meta=meta)
+            output,loss_dict = model(views=inputs, meta=meta)
+            
+            loss_ce.update(loss_dict['loss_ce'].sum().item())
+            loss_pose_perjoint.update(loss_dict['loss_pose_perjoint'].sum().item())
+            if 'loss_pose_perprojection' in loss_dict:
+                loss_pose_perprojection.update(
+                    loss_dict['loss_pose_perprojection'].sum().item())
 
             meta_image_files.append(meta[0]['image'])
             gt_3d = meta[0]['joints_3d'].float()
@@ -183,17 +194,26 @@ def validate_3d(config, model, loader, output_dir, threshold, num_views=5):
 
             batch_time.update(time.time() - end)
             end = time.time()
-            if (i % config.PRINT_FREQ == 0 or i == len(loader) - 1) \
+            if ((i+1) % config.PRINT_FREQ == 0 or i+1 == len(loader)) \
                     and is_main_process():
                 gpu_memory_usage = torch.cuda.memory_allocated(0)
                 msg = 'Test: [{0}/{1}]\t' \
                       'Time: {batch_time.val:.3f}s ({batch_time.avg:.3f}s)\t' \
                       'Speed: {speed:.1f} samples/s\t' \
                       'Data: {data_time.val:.3f}s ({data_time.avg:.3f}s)\t' \
+                      'loss_ce: {loss_ce.val:.7f} ' '({loss_ce.avg:.7f})\t' \
+                      'loss_pose_perjoint: {loss_pose_perjoint.val:.6f} ' \
+                      '({loss_pose_perjoint.avg:.6f})\t' \
+                      'loss_pose_perprojection: {loss_pose_perprojection.val:.6f} ' \
+                      '({loss_pose_perprojection.avg:.6f})\t' \
                       'Memory {memory:.1f}'.format(
-                        i, len(loader), batch_time=batch_time,
+                        i+1, len(loader), batch_time=batch_time,
                         speed=len(inputs) * inputs[0].size(0) / batch_time.val,
-                        data_time=data_time, memory=gpu_memory_usage)
+                        data_time=data_time,
+                        loss_ce=loss_ce,
+                        loss_pose_perjoint=loss_pose_perjoint,
+                        loss_pose_perprojection=loss_pose_perprojection,
+                        memory=gpu_memory_usage)
                 logger.info(msg)
 
                 prefix2 = '{}_{:08}'.format(

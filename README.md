@@ -32,11 +32,11 @@ cd ../..
 To use MvP on CMU Panoptic, Shelf/Campus, Human3.6M datasets refer to the original [MvP repository](https://github.com/sail-sg/mvp).
 
 ### 2.1 Model
-Please follow [VoxelPose](https://github.com/microsoft/voxelpose-pytorch?tab=readme-ov-file#cmu-panoptic-dataset) to download the PoseResNet-50 pre-trained model. Also download the [Sam vit_h](https://github.com/facebookresearch/segment-anything?tab=readme-ov-file#model-checkpoints)  model checkpoint. For evaluation donwload the [YOLO_Barn model](https://zenodo.org/records/10453890) used by [3D-MuPPET](https://github.com/alexhang212/3D-MuPPET)
+Please follow [VoxelPose](https://github.com/microsoft/voxelpose-pytorch?tab=readme-ov-file#cmu-panoptic-dataset) to download the PoseResNet-50 pre-trained model. Also download the [SAM ViT-H](https://github.com/facebookresearch/segment-anything?tab=readme-ov-file#model-checkpoints)  model checkpoint. For evaluation donwload the [YOLO_Barn model](https://zenodo.org/records/10453890) used by [3D-MuPPET](https://github.com/alexhang212/3D-MuPPET)
 
 ### 2.2 3D-POP
 
-Download the [3D-Pop dataset](https://edmond.mpg.de/dataset.xhtml?persistentId=doi:10.17617/3.HPBBC7) anywhere on your system. You can only download the N6000 folder as well as Sequences 1, 2, 5 and 11. After that clone the 3D-POP-Dataset repository and activate the SAM conda enviroment. The SAM conda enviroment is only needed for dataset creation. The dataset creation can also be performed on another machine if that is more convinient.
+Download the [3D-POP dataset](https://edmond.mpg.de/dataset.xhtml?persistentId=doi:10.17617/3.HPBBC7) anywhere on your system. You can only download the N6000 folder as well as Sequences 1, 2, 5 and 11. After that clone the 3D-POP-Dataset repository and activate the SAM conda enviroment. The SAM conda enviroment is only needed for dataset creation. The dataset creation can also be performed on another machine if that is more convinient.
 ```
 git clone https://github.com/alexhang212/Dataset-3DPOP.git ./Utils
 conda env create -f sam.yml
@@ -69,16 +69,29 @@ ${POSE_ROOT}
 
 
 ## 3. Training and Evaluation
-The evaluation result will be printed after every epoch, the best result can be found in the log. For the 3D-POP trainings dataset:
+For Training and evauluation first  set the correct python path:
+
+```
+export PYTHONPATH="${PYTHONPYTH}:path_to_project/MvP-TI"
+```
+
+For training on the 3D-POP dataset run:
 
 ```
 python -m torch.distributed.launch --nproc_per_node=4 --use_env run/train_3d.py --cfg configs/pop3d/best_model_config.yaml
 ```
- And for the segmented 3D-POP trainings dataset:
+And for the segmented 3D-POP dataset run:
 
 ```
 python -m torch.distributed.launch --nproc_per_node=4 --use_env run/train_3d.py --cfg configs/pop3d-seg/best_model_config.yaml
 ```
+
+The evaluation result will be printed after every epoch, all result can additionaly be found in the log file. The best checkpoint is saved as model_best.pth.tar. The results in the log files can be plotted with:
+
+```
+python Utils/plot.py path_to_log_file
+```
+
 
 ## 4. Evaluation
 

@@ -9,18 +9,14 @@ GPUS: '1,2,3,4'
 OUTPUT_DIR: 'output-seg'
 LOG_DIR: 'log'
 WORKERS: 4
-PRINT_FREQ: 50
+PRINT_FREQ: 100
 
 DATASET:
   COLOR_RGB: True
   TRAIN_DATASET: 'pop3d'
   TEST_DATASET: 'pop3d'
   DATA_FORMAT: jpg
-  DATA_AUGMENTATION: False
-  FLIP: False
   ROOT: 'data/pop3d-seg'
-  ROT_FACTOR: 45
-  SCALE_FACTOR: 0.35
   TEST_SUBSET: 'validation'
   TRAIN_SUBSET: 'train'
   ROOTIDX: 6
@@ -30,14 +26,9 @@ NETWORK:
   PRETRAINED:  ''
   TARGET_TYPE: gaussian
   IMAGE_SIZE:
-  - 960
-  - 512
-  HEATMAP_SIZE:
-  - 240
-  - 128
-  SIGMA: 3
+  - 2880
+  - 1620
   NUM_JOINTS: 9
-  USE_GT: False
 POSE_RESNET:
   FINAL_CONV_KERNEL: 1
   DECONV_WITH_BIAS: False
@@ -57,7 +48,7 @@ TRAIN:
   BATCH_SIZE: 1
   SHUFFLE: true
   BEGIN_EPOCH: 0
-  END_EPOCH: 200
+  END_EPOCH: 300
   RESUME: False
   OPTIMIZER: adam
   LR: 0.0001
@@ -66,8 +57,6 @@ TEST:
   BATCH_SIZE: 1
 DEBUG:
   DEBUG: true
-  SAVE_HEATMAPS_GT: true
-  SAVE_HEATMAPS_PRED: true
 MULTI_PERSON:
   SPACE_SIZE:
     - 5600
@@ -78,20 +67,12 @@ MULTI_PERSON:
     - 820 # -600.0
     - 475
   INITIAL_CUBE_SIZE:
-    - 80
-    - 80
-    - 20
+    - 560 #112
+    - 620 #124
+    - 100 #20
   MAX_PEOPLE_NUM: 10
   THRESHOLD: 0.3
-PICT_STRUCT:
-  GRID_SIZE:
-    - 2000.0
-    - 2000.0
-    - 2000.0
-  CUBE_SIZE:
-    - 64
-    - 64
-    - 64
+
 DECODER:
   d_model: 256
   nhead: 8

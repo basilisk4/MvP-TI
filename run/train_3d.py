@@ -142,7 +142,7 @@ def main():
 
     print('=> Loading data ..')
     normalize = transforms.Normalize(
-        mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        mean=[0.006, 0.006, 0.006], std=[0.077, 0.077, 0.077])
     train_dataset = eval('dataset.' + config.DATASET.TRAIN_DATASET)(
         config, config.DATASET.TRAIN_SUBSET, True,
         transforms.Compose([
@@ -241,7 +241,7 @@ def main():
     print('number of params:', n_parameters)
 
     for epoch in range(start_epoch, end_epoch):
-        print('Epoch: {}'.format(epoch))
+        print('Epoch: {}'.format(epoch+1))
         print('current lr {}'.format(optimizer.param_groups[0]["lr"]))
         train_3d(config, model, optimizer, train_loader, epoch,
                  final_output_dir, num_views=num_views)
@@ -316,6 +316,7 @@ def main():
                         'precision': best_precision,
                         'optimizer': optimizer.state_dict(),
                     }, best_model, final_output_dir)
+                torch.save(model.module.state_dict(), os.path.join(final_output_dir,'checkpoint-'+str(epoch+1)+'.pth.tar'))
             dist.barrier()
 
     if is_main_process():

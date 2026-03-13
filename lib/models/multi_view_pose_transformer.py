@@ -449,7 +449,7 @@ class MultiviewPosetransformer(nn.Module):
             out['aux_outputs'] = \
                 self._set_aux_loss(outputs_classes, outputs_coords)
 
-        if self.training and 'joints_3d' in meta[0] \
+        if 'joints_3d' in meta[0] \
                 and 'joints_3d_vis' in meta[0]:
             meta[0]['roots_3d_norm'] = \
                 self.absolute2norm(meta[0]['roots_3d'].float())

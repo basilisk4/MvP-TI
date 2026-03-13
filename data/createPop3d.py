@@ -111,6 +111,27 @@ def createDataset(pop3d_path, out_path, sam_ckpt):
           name=cam.CamName
           #Convert camera calibration parameters
           R, _ = cv2.Rodrigues(cam.rvec)
+          T=np.array(cam.tvec)
+          # Build extrinsic matrix [R | T]
+          E = np.eye(4)
+          E[:3, :3] = R
+          E[:3, 3:] = T
+
+          # Compute camera center in world coordinates: C = -R^{-1} T
+          C = -np.linalg.inv(R) @ T
+
+          # Homogeneous world point [-R^{-1}T, 1]
+          Xw = np.vstack((C, [[1]]))
+
+          # Transform to camera coordinates
+          Xc = E @ Xw
+
+          print("World point Xw:")
+          print(Xw)
+
+          print("\nTransformed point Xc:")
+          print(Xc)
+
           CamParamList.append({
                   "name": name,
                   "K":cam.camMat.tolist(),

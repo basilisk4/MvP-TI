@@ -1,328 +1,185 @@
-"""Run sequence with kalman filter"""
-
-import argparse
-import numpy as np
-import pickle
-import math
-from tqdm import tqdm
-from glob import glob
 import os
+import math
+import pickle
+from glob import glob
 
+import numpy as np
 import pandas as pd
-
+from tqdm import tqdm
 from pykalman import KalmanFilter
-from natsort import natsort
-import copy
-
-###write a function to calculate the euclidian distance between two points
-
-def EucDist(Point1,Point2):
-    """Get euclidian error, both 2D and 3D"""
-    
-    if len(Point1) ==3 & len(Point2) ==3:
-        EucDist =math.sqrt(((Point1[0] - Point2[0]) ** 2) + ((Point1[1] - Point2[1]) ** 2) + ((Point1[2] - Point2[2]) ** 2) )
-    elif len(Point1) ==2 & len(Point2) ==2:
-        EucDist =math.sqrt(((Point1[0] - Point2[0]) ** 2) + ((Point1[1] - Point2[1]) ** 2))
-    else:
-        import ipdb;ipdb.set_trace()
-        Exception("point input size error")
-    
-    return EucDist
+from natsort import natsorted
 
 
-def RunRollingAverage(ColVals, WindowSize = 10):
-    # import ipdb;ipdb.set_trace()
-    Detections = copy.deepcopy(ColVals)
-    # Output = copy.deepcopy(ColVals)
+def euclidean_distance(p1, p2):
+    """Euclidean distance for 2D or 3D points."""
+    if len(p1) == 3 and len(p2) == 3:
+        return math.sqrt(
+            (p1[0] - p2[0]) ** 2 +
+            (p1[1] - p2[1]) ** 2 +
+            (p1[2] - p2[2]) ** 2
+        )
 
-    for i in range(ColVals.shape[0]):
+    if len(p1) == 2 and len(p2) == 2:
+        return math.sqrt(
+            (p1[0] - p2[0]) ** 2 +
+            (p1[1] - p2[1]) ** 2
+        )
 
-        if i < WindowSize:
-            continue
-        else:
-            # Avg = np.nanmean(ColVals[i-WindowSize:i],axis = 0)
-            Avg = np.nanmean(Detections[i-WindowSize:i],axis = 0)
-
-            # import ipdb;ipdb.set_trace()
-
-            if abs(EucDist(Avg,ColVals[i])) > 10:
-                ColVals[i] = np.array([np.nan,np.nan,np.nan])
-            # if any(abs(ColVals[i]-Avg)>10):
-            #     ColVals[i] = np.array([np.nan,np.nan,np.nan])
-
-    # # 
-    # plt.figure(1)
-    # times = range(ColVals.shape[0])
-    # plt.plot(times, Detections[:, 0], 'bo',
-    #         times, Detections[:, 1], 'ro',
-    #         times, Detections[:, 2], 'go',
-    #         times, ColVals[:,0], 'b--',
-    #         times, ColVals[:,1], 'r--',
-    #         times, ColVals[:, 2], 'g--',
-    #         markersize=1, linewidth=2)
-    # plt.show()
-    # import ipdb;ipdb.set_trace()
+    raise ValueError("Point dimension mismatch")
 
 
+def run_kalman(col_vals):
+    """Apply Kalman filter to 3D trajectory."""
 
-    return ColVals
+    first_valid = np.where(~np.isnan(col_vals))[0][0]
+    initial_state_mean = [
+        col_vals[first_valid, 0], 0,
+        col_vals[first_valid, 1], 0,
+        col_vals[first_valid, 2], 0
+    ]
 
+    transition_matrix = [
+        [1, 1, 0, 0, 0, 0],
+        [0, 1, 0, 0, 0, 0],
+        [0, 0, 1, 1, 0, 0],
+        [0, 0, 0, 1, 0, 0],
+        [0, 0, 0, 0, 1, 1],
+        [0, 0, 0, 0, 0, 1],
+    ]
 
+    observation_matrix = [
+        [1, 0, 0, 0, 0, 0],
+        [0, 0, 1, 0, 0, 0],
+        [0, 0, 0, 0, 1, 0],
+    ]
 
-def RunKalman(ColVals):
-    """    
-    Run kalman filter to smooth points?
-    Referencing this: https://stackoverflow.com/questions/43377626/how-to-use-kalman-filter-in-python-for-location-data
-    """
+    masked_data = np.ma.array(col_vals, mask=np.isnan(col_vals))
 
-    ##Initial State mean:
-    InitialStateList = []
-    FirstValIndex = np.where(~np.isnan(ColVals))[0][0]
-    for col in range(ColVals.shape[1]):
-        InitialStateList.append(ColVals[FirstValIndex,col])
+    kf = KalmanFilter(
+        transition_matrices=transition_matrix,
+        observation_matrices=observation_matrix,
+        initial_state_mean=initial_state_mean,
+    )
 
+    init_n = 2
+    kf = kf.em(masked_data[:init_n], n_iter=5)
 
-    initial_state_mean = [InitialStateList[0],0,InitialStateList[1],0,InitialStateList[2],0]
+    state_means, state_cov = kf.filter(masked_data[:init_n])
 
-    transition_matrix = [[1, 1, 0, 0, 0, 0],
-                        [0, 1, 0, 0, 0, 0],
-                        [0, 0, 1, 1, 0, 0],
-                        [0, 0, 0, 1, 0, 0],
-                        [0, 0, 0, 0, 1, 1],
-                        [0, 0, 0, 0, 0, 1]]
+    out = np.zeros((3, masked_data.shape[0]))
+    out[:, :init_n] = np.vstack([
+        state_means[:, 0],
+        state_means[:, 2],
+        state_means[:, 4]
+    ])
 
-    observation_matrix = [[1, 0, 0, 0, 0, 0],
-                        [0, 0, 1, 0, 0, 0],
-                        [0, 0, 0, 0, 1, 0]]
+    state_mean = state_means[-1]
+    state_cov = state_cov[-1]
 
+    for i in range(init_n, masked_data.shape[0]):
+        state_mean, state_cov = kf.filter_update(
+            state_mean,
+            state_cov,
+            masked_data[i]
+        )
 
-    ##Masked Array:
-    # import ipdb;ipdb.set_trace()
-    MaskedData = np.ma.array(ColVals, mask = np.isnan(ColVals))
+        out[0, i] = state_mean[0]
+        out[1, i] = state_mean[2]
+        out[2, i] = state_mean[4]
 
-    # Process noise covariance (increase these values)
-    process_noise_cov = np.eye(6) * 0.99
-    # process_noise_cov[(1,3,5),:] = process_noise_cov[(1,3,5),:] * 2
-
-    # Observation noise covariance (decrease this value)
-    observation_noise_cov = np.array([[1],[1],[1]])  
-
-
-    # kf1 = KalmanFilter(transition_matrices = transition_matrix,
-    #                 observation_matrices = observation_matrix,
-    #                 initial_state_mean = initial_state_mean,
-    #                 initial_state_covariance = np.eye(6),
-    #                   transition_covariance=process_noise_cov,
-    #                   observation_covariance=observation_noise_cov)
-
-
-    kf1 = KalmanFilter(transition_matrices = transition_matrix,
-                    observation_matrices = observation_matrix,
-                    initial_state_mean = initial_state_mean,
-                    # initial_state_covariance = np.eye(6),
-                    # transition_covariance=process_noise_cov,
-                    # observation_covariance=observation_noise_cov
-                    )
-
-
-    # kf1 = kf1.em(MaskedData, n_iter=5)
+    return [out[0], out[1], out[2]]
 
 
-    #initialize:
-    # import ipdb;ipdb.set_trace()
-    # kf1.transition_covariance[(1,3,5),:] = kf1.transition_covariance[(1,3,5),:]*2
+def run_interpolation_3d(predictions3d):
+    """Convert dictionary format and apply Kalman filtering."""
 
-    InitializeNum = 2
-    kf1 = kf1.em(MaskedData[:InitializeNum], n_iter=5)
+    reformatted = {}
 
-    (filtered_state_means, filtered_state_covariances)  = kf1.filter(MaskedData[:InitializeNum])
-    x_new = np.zeros((3, MaskedData.shape[0]))
-    x_new[0,0:InitializeNum] = filtered_state_means[:,0]
-    x_new[1,0:InitializeNum] = filtered_state_means[:,2]
-    x_new[2,0:InitializeNum] = filtered_state_means[:,4]
-
-    filtered_state_means = filtered_state_means[-1]
-    filtered_state_covariances = filtered_state_covariances[-1]
-
-    # import ipdb;ipdb.set_trace()
-    ShiftCounter = 1
-    for i in range(MaskedData.shape[0]):
-        if i < InitializeNum:
-            continue
-        # # import ipdb;ipdb.set_trace()
-        # PredictedStateNext = kf1.transition_matrices.dot(filtered_state_means)
-        # PredictedNextPointList = [PredictedStateNext[0],PredictedStateNext[2],PredictedStateNext[4]]
-        # Diff = EucDist(np.array(PredictedNextPointList),MaskedData[i])
-        # # Diff = np.mean(np.array(PredictedNextPointList)-MaskedData[i])
-
-        
-        # if Diff > 100:
-        #     # x_new[0,i] = PredictedNextPointList[0]
-        #     # x_new[1,i] = PredictedNextPointList[1]
-        #     # x_new[2,i] = PredictedNextPointList[2]
-        #     x_new[0,i] = np.nan
-        #     x_new[1,i] = np.nan
-        #     x_new[2,i] = np.nan
-        #     filtered_state_means = PredictedStateNext
-        #     # filtered_state_covariances = kf1.transition_covariance + kf1.transition_matrices.dot(kf1.initial_state_covariance).dot(kf1.transition_matrices.T)
-        #     # (filtered_state_means, filtered_state_covariances)  = kf1.filter_update(filtered_state_means, filtered_state_covariances, MaskedData[i-ShiftCounter])
-        #     ShiftCounter += 1
-        #     continue
-        # else:
-        (filtered_state_means, filtered_state_covariances)  = kf1.filter_update(filtered_state_means, filtered_state_covariances, MaskedData[i])
-        x_new[0,i] = filtered_state_means[0]
-        x_new[1,i] = filtered_state_means[2]
-        x_new[2,i] = filtered_state_means[4]
-        ShiftCounter = 1
-    # kf1 = kf1.em(MaskedData, n_iter=5)
-    # (smoothed_state_means, smoothed_state_covariances) = kf1.smooth(MaskedData)
-    # (smoothed_state_means, smoothed_state_covariances) = kf1.filter(MaskedData)
-
-
-    # # import ipdb;ipdb.set_trace()
-    # plt.figure(1)
-    # times = range(MaskedData.shape[0])
-    # plt.plot(times, MaskedData[:, 0], 'bo',
-    #         times, MaskedData[:, 1], 'ro',
-    #         times, MaskedData[:, 2], 'go',
-    #         times, x_new[0,:], 'b--',
-    #         times, x_new[1,:], 'r--',
-    #         times, x_new[2, :], 'g--',
-    #         markersize=1, linewidth=2)
-    # plt.show()
-
-    Results = [x_new[0,:],x_new[1,:],x_new[2,:]]
-
-    return Results
-
-
-
-def RunInterpolation3D(Predictions3D):
-
-    NewPredictions = {}
-    for key,val in Predictions3D.items():
-        NewDict = {}
-
-        for k,v in val.items():
-            if type(v) == float: #if type is float, it is nan
-                NewDict["%s_x"%k] = np.nan
-                NewDict["%s_y"%k] = np.nan
-                NewDict["%s_z"%k] = np.nan
+    for frame, keypoints in predictions3d.items():
+        frame_dict = {}
+        for name, value in keypoints.items():
+            if isinstance(value, float):
+                frame_dict[f"{name}_x"] = np.nan
+                frame_dict[f"{name}_y"] = np.nan
+                frame_dict[f"{name}_z"] = np.nan
             else:
-                NewDict["%s_x"%k] = v[0]
-                NewDict["%s_y"%k] = v[1]
-                NewDict["%s_z"%k] = v[2]
-        NewPredictions[key] = NewDict
+                frame_dict[f"{name}_x"] = value[0]
+                frame_dict[f"{name}_y"] = value[1]
+                frame_dict[f"{name}_z"] = value[2]
 
-    data = pd.DataFrame.from_dict(NewPredictions,orient= "index")
-    # LinearInterpolate = data.interpolate(type="index", axis = 0)
-    # SplineInterpolate = data.interpolate(type="spline",degree=5, axis = 0)
+        reformatted[frame] = frame_dict
 
-    ###Kalman
-    KalmanData = data.copy()
-    UnqNames = natsort.natsorted(list(set([col[:-2] for col in data.columns])))
+    data = pd.DataFrame.from_dict(reformatted, orient="index")
 
-    for name in tqdm(UnqNames):
-        ColNames = ["%s_x"%name,"%s_y"%name,"%s_z"%name]
-        ColVals = data[ColNames].to_numpy()
-        # NewVals = RunKalman(ColVals)
-        NewVals = RunRollingAverage(ColVals)
-        KalmanData[ColNames[0]] = NewVals[:,0]
-        KalmanData[ColNames[1]] = NewVals[:,1]
-        KalmanData[ColNames[2]] = NewVals[:,2]
+    kalman_data = data.copy()
+    names = natsorted({c[:-2] for c in data.columns})
 
+    for name in  tqdm(
+        names,
+        desc="Keypoints filtering",
+        position=1,
+        leave=False
+    ):
+        cols = [f"{name}_x", f"{name}_y", f"{name}_z"]
+        vals = data[cols].to_numpy()
 
-    # import ipdb;ipdb.set_trace()
-    UnqNames = natsort.natsorted(list(set([col[:-2] for col in data.columns])))
-    NewDF = pd.DataFrame(columns = UnqNames)
+        filtered = run_kalman(vals)
 
-    for name in UnqNames:
-        ColNames = ["%s_x"%name,"%s_y"%name,"%s_z"%name]
-        ListVal = KalmanData[ColNames].values.tolist()
-        ##If any of the dimensions are nan, make it all nan
-        # ListVal2 = [val if not any(np.isnan(val)) else [np.nan,np.nan,np.nan] for val in ListVal ]
-        ListVal2 = [val if not any(np.isnan(val)) else np.nan for val in ListVal]
+        kalman_data[cols[0]] = filtered[0]
+        kalman_data[cols[1]] = filtered[1]
+        kalman_data[cols[2]] = filtered[2]
 
-        NewDF[name] = ListVal2
+    new_df = pd.DataFrame(columns=names)
 
+    for name in names:
+        cols = [f"{name}_x", f"{name}_y", f"{name}_z"]
+        vals = kalman_data[cols].values.tolist()
 
-    NewDF = NewDF.applymap(np.array)
-    NewDF.index = data.index
-    FinalDict = NewDF.to_dict(orient="index")
+        vals = [v if not any(np.isnan(v)) else np.nan for v in vals]
+        new_df[name] = vals
 
+    new_df = new_df.applymap(np.array)
+    new_df.index = data.index
 
-    # import ipdb;ipdb.set_trace()
-    TempDict = pd.DataFrame.from_dict(Predictions3D,orient= "index")
-    NANBefore = np.sum(TempDict.isna().sum().to_numpy())
-    NANAfter = np.sum(NewDF.isna().sum().to_numpy())
+    final_dict = new_df.to_dict(orient="index")
 
-    # import ipdb;ipdb.set_trace()
+    before = pd.DataFrame.from_dict(predictions3d, orient="index")
+    nan_before = np.sum(before.isna().sum().to_numpy())
+    nan_after = np.sum(new_df.isna().sum().to_numpy())
 
+    percent_removed = (nan_after - nan_before) * 100 / new_df.size
+    #print(f"Total Removed: {percent_removed}%")
 
-    PercentageKPRemoved = (NANAfter-NANBefore)*100/NewDF.size
-    print("Total Removed: %s%%"%((NANAfter-NANBefore)*100/NewDF.size))
-
-    return FinalDict,PercentageKPRemoved
+    return final_dict, percent_removed
 
 
-def applyKalman(EvalDir,Sequences,ModelName):
-    #CamNames = ["Cam1","Cam2","Cam3","Cam4"]
-    #PickleFiles = [os.path.basename(file) for file in glob(EvalDir + "/*.p") if "Points3D" in file or "Points2D" in file]
-    #Files3D = [file for file in PickleFiles if "Points3D" in file]
-    # import ipdb;ipdb.set_trace()
-    PercentageDict = {ModelName:{}}
-    # for file3d in tqdm(Files3D):
-        # file3d = Files3D[101]
+def apply_kalman(eval_dir, sequences, model_name):
+    percentage = {model_name: {}}
+    print("Applying Kalman filter...")
 
-    # _, _, ModelName, SeqNum= file3d.split("_")
-    # SeqNum = SeqNum.split(".")[0].split("Seq")[1]
-    
-    for SeqNum in tqdm(Sequences):
-        print("Sequence: %s, Model: %s"%(SeqNum,ModelName))
-        # import ipdb;ipdb.set_trace()
-        # if os.path.exists(os.path.join(EvalDir,"SeqEval_Kalman3D_%s_Seq%s.p"%(ModelName,SeqNum))):
-        #     continue
-        Predictions3D= pickle.load(open(os.path.join(EvalDir,"SeqEval_Points3D_%s_Seq%s.p"%(ModelName,SeqNum)),"rb"))
-        # Predictions2D = pickle.load(open(os.path.join(EvalDir,"SeqEval_Points2D_%s_Seq%s.p"%(ModelName,SeqNum) ), "rb"))
-        KalmanOut,PercentageKPRemoved = RunInterpolation3D(Predictions3D)
-        PercentageDict[ModelName][SeqNum] = PercentageKPRemoved
-        # pickle.dump(LinearOut, open(os.path.join(EvalDir,"SeqEval_Linear3D_%s_Seq%s.p"%(ModelName,SeqNum)), "wb"))
-        # pickle.dump(SplineOut, open(os.path.join(EvalDir,"SeqEval_Spline3D_%s_Seq%s.p"%(ModelName,SeqNum)), "wb"))
-        pickle.dump(KalmanOut, open(os.path.join(EvalDir,"SeqEval_RollingFilter3D_%s_Seq%s.p"%(ModelName,SeqNum)), "wb"))
+    for seq in tqdm(sequences, desc="Processing sequences", position=0):
+        #print(f"Sequence: {seq}, Model: {model_name}")
 
-    FinalDF = pd.DataFrame.from_dict(PercentageDict)
-    print("Mean % Removed:")
-    print(FinalDF.apply(np.mean,axis = 0))
+        file_path = os.path.join(
+            eval_dir,
+            f"SeqEval_Points3D_{model_name}_Seq{seq}.p"
+        )
 
+        predictions = pickle.load(open(file_path, "rb"))
 
+        kalman_out, removed = run_interpolation_3d(predictions)
+        percentage[model_name][seq] = removed
 
-def ParseArgs():
-    parser = argparse.ArgumentParser()
-    
-    parser.add_argument("--path",
-                        type=str,
-                        required=True,
-                        help="path with inference files")
-    parser.add_argument("--name",
-                        type=str,
-                        required=True,
-                        help="Name for the whole framework")
-    parser.add_argument("--Sequences",
-                        type=list,
-                        required=True,
-                        help="Sequences to apply the kalman filter to")
+        out_path = os.path.join(
+            eval_dir,
+            f"SeqEval_Kalman3DRerun_{model_name}_Seq{seq}.p"
+        )
 
-    arg = parser.parse_args()
+        pickle.dump(kalman_out, open(out_path, "wb"))
 
-    return arg
+    df = pd.DataFrame.from_dict(percentage)
 
-if __name__ == "__main__":
-    args = ParseArgs()
-    EvalDir = args.path
-    ModelName = args.name
-    Sequences = args.Sequences
-    applyKalman(EvalDir,Sequences,ModelName)
+    #print("Mean % Removed:")
+    #print(df.apply(np.mean, axis=0))
 
 
-
-    # import ipdb;ipdb.set_trace()

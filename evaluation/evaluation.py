@@ -7,7 +7,7 @@ import math
 import cv2
 import json
 from scipy.spatial.distance import pdist, squareform
-from KalmanPostProcess import applyKalman
+from KalmanPostProcess import apply_kalman
 from SeqEvaluationMetrics import runEvaluation
 import sys
 sys.path.append("Utils")
@@ -32,6 +32,7 @@ def ParseArgs():
 
 def VizualizeAll(path,Point3DDict, Lines = True):
     """Visualize all on visualize cam"""
+    path=path.replace('pop3d-eval-seg','pop3d-eval')
     frame=cv2.imread(path)
     path=path.split('/')
     Cam=path[-2]
@@ -59,7 +60,8 @@ def VizualizeAll(path,Point3DDict, Lines = True):
         # import ipdb;ipdb.set_trace()
         try:
             Allimgpts, jac = cv2.projectPoints(Points3DArr, VisCam['R'], VisCam["t"], VisCam['K'], VisCam['distCoef'])
-        except:
+        except Exception as e: 
+            print(e)
             continue
 
         for i in range(len(Allimgpts)):
@@ -76,10 +78,10 @@ def VizualizeAll(path,Point3DDict, Lines = True):
     
         ##Plot Lines:
         if Lines:
-            VisualizeUtil.PlotLine(PointsDict,"leftEye","nose",[0,0,255],frame)
-            VisualizeUtil.PlotLine(PointsDict,"rightEye","nose",[0,0,255],frame)
-            VisualizeUtil.PlotLine(PointsDict,"beak","nose",[0,0,255],frame)
-            VisualizeUtil.PlotLine(PointsDict,"leftEye","rightEye",[0,0,255],frame)
+            VisualizeUtil.PlotLine(PointsDict,"leftEye","nose",[255,0,0],frame)
+            VisualizeUtil.PlotLine(PointsDict,"rightEye","nose",[255,0,0],frame)
+            VisualizeUtil.PlotLine(PointsDict,"beak","nose",[255,0,0],frame)
+            VisualizeUtil.PlotLine(PointsDict,"leftEye","rightEye",[255,0,0],frame)
             VisualizeUtil.PlotLine(PointsDict,"leftShoulder","rightShoulder",[0,255,0],frame)
             VisualizeUtil.PlotLine(PointsDict,"leftShoulder","topKeel",[0,255,0],frame)
             VisualizeUtil.PlotLine(PointsDict,"topKeel","rightShoulder",[0,255,0],frame)
@@ -93,7 +95,10 @@ def VizualizeAll(path,Point3DDict, Lines = True):
 def VisualizeID(path,id_dict,VisCam):
     """Visualize all on visualize cam"""
     frame=cv2.imread(path)
-    points2d,_=cv2.projectPoints(np.array([list(id_dict.values())]), VisCam['R'], VisCam["t"], VisCam['K'], VisCam['distCoef'])
+    try:
+        points2d,_=cv2.projectPoints(np.array([list(id_dict.values())]), VisCam['R'], VisCam["t"], VisCam['K'], VisCam['distCoef'])
+    except:
+        return
     for i,id in enumerate(id_dict):
         Point=points2d[i][0]
         Point=Point.ravel().astype(int)
@@ -114,10 +119,10 @@ def select_preds(preds, n):
         coordinates=pred[:,:3]
         distances=pdist(coordinates)
         size=np.max(distances)
-        print(size)
+        #print(size)
         if size<250:
             filtered_preds.append(pred)
-    
+    #return filtered_preds
     #select the predictions that are most likly therby only selectiing one for each bird        
     sorted_preds= sorted(filtered_preds, key=lambda x: x[0][4], reverse=True)
     sorted_preds=[pred[:,:3] for pred in sorted_preds]
@@ -212,7 +217,7 @@ def match_one_pred(pred, pred_list, threshold=0):
     match_index = -1
 
     for i, compare_pred in enumerate(pred_list):
-        distance = np.average(np.linalg.norm(pred - compare_pred, axis=1))  # Assuming the 8th element contains the coordinates.
+        distance = np.average(np.linalg.norm(pred - compare_pred, axis=1))  
         if distance < min_distance and (distance < threshold or threshold == 0):
             match_index = i
             min_distance = distance
@@ -311,7 +316,7 @@ if __name__ == "__main__":
         seq_dict[Sequence]=frame_dict
         image,VisCam=VizualizeAll(path[0],entrie)
         cv2.imwrite(os.path.join(image_path,f"{Sequence}-{frame}.jpg"),image)
-
+    
         
     
     for seq, framedict in seq_dict.items(): 
@@ -320,7 +325,7 @@ if __name__ == "__main__":
         export_results(matched_dict,seq,ModelName,OutDir,VisCam) 
         seq_dict[seq]= matched_dict
         
-    applyKalman(OutDir,evalSeqs, ModelName)
-    runEvaluation(os.path.abspath(OutDir),DatasetPath, [ModelName], [ModelName], evalSeqs)
+    apply_kalman(OutDir,evalSeqs, ModelName)
+    runEvaluation(os.path.abspath(OutDir),DatasetPath, [ModelName], [], evalSeqs)
         
     

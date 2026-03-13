@@ -1,747 +1,260 @@
-"""Compute metrics on outputs of sequence evaluation"""
+"""
+Compute metrics on outputs of sequence evaluation (3D + 2D).
+Sequential implementation with full CSV summary generation.
+"""
 
-import numpy as np
 import os
 import sys
+import math
+import pickle
+import itertools
+import statistics
 
-ParentDir=os.path.dirname(os.path.realpath(__file__))
-path=os.path.join(ParentDir,"../Utils/")
-sys.path.append(path)
-path=os.path.join(path,"Dataset-3DPOP")
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
+from scipy.spatial.distance import cdist
+
+# ---------------------------------------------------------------------
+# Paths & imports
+# ---------------------------------------------------------------------
+
+PARENT_DIR = os.path.dirname(os.path.realpath(__file__))
+UTILS_DIR = os.path.join(PARENT_DIR, "../Utils")
+DATASET_DIR = os.path.join(UTILS_DIR, "Dataset-3DPOP")
+
+sys.path.append(UTILS_DIR)
+sys.path.append(DATASET_DIR)
+
 import HungarianAlgorithm
-sys.path.append(path)
 from POP3D_Reader import Trial
 
-import HungarianAlgorithm
+# ---------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------
 
-import pickle
-import math
-from tqdm import tqdm
-import itertools
-from glob import glob
+PIGEON_KEYPOINT_NAMES = [
+    "hd_beak", "hd_nose", "hd_leftEye", "hd_rightEye",
+    "bp_leftShoulder", "bp_rightShoulder",
+    "bp_topKeel", "bp_bottomKeel", "bp_tail"
+]
 
-from scipy.spatial.distance import cdist
-import statistics
-import pandas as pd
+# ---------------------------------------------------------------------
+# Simplified basic metrics
+# ---------------------------------------------------------------------
 
-
-
-PIGEON_KEYPOINT_NAMES = ["hd_beak","hd_nose","hd_leftEye","hd_rightEye","bp_leftShoulder","bp_rightShoulder","bp_topKeel","bp_bottomKeel","bp_tail"]
-
-
-def GetEucDist(Point1,Point2):
-    """Get euclidian error, both 2D and 3D"""
-
-    if len(Point1) ==3 & len(Point2) ==3:
-        EucDist =math.sqrt(((Point1[0] - Point2[0]) ** 2) + ((Point1[1] - Point2[1]) ** 2) + ((Point1[2] - Point2[2]) ** 2) )
-    elif len(Point1) ==2 & len(Point2) ==2:
-        EucDist =math.sqrt(((Point1[0] - Point2[0]) ** 2) + ((Point1[1] - Point2[1]) ** 2))
+def GetEucDist(p1, p2):
+    if len(p1) == 3 and len(p2) == 3:
+        return math.sqrt(sum((a-b)**2 for a,b in zip(p1,p2)))
+    elif len(p1) == 2 and len(p2) == 2:
+        return math.sqrt(sum((a-b)**2 for a,b in zip(p1,p2)))
     else:
-        import ipdb;ipdb.set_trace()
-        Exception("point input size error")
+        raise Exception("Point input size error")
 
-    return EucDist
+def GetPCK(dist, max_dist):
+    return (1 if dist/max_dist < 0.1 else 0, 1 if dist/max_dist < 0.05 else 0)
 
-def GetPCK(PointDist,MaxDist):
-    """Given euclidiean distance between 2 points and max distance between 2 points of given pigeon, calc whether keypoint is correct, as 1 and 0"""
-    PCK10 = 0
-    PCK05 = 0
+def GetRMSE(vals):
+    vals = [v for v in vals if v == v]
+    return np.sqrt(np.mean(np.array(vals)**2))
 
-    PercentageofMax = PointDist/MaxDist
+def GetMedian(vals):
+    vals = [v for v in vals if v == v]
+    return statistics.median(vals)
 
-    if PercentageofMax < 0.1:
-        PCK10 = 1
+def GetPCKSum(vals):
+    vals = [v for v in vals if v == v]
+    return (sum(vals)/len(vals))*100
 
-    if PercentageofMax < 0.05:
-        PCK05 = 1
+# ---------------------------------------------------------------------
+# ID matching
+# ---------------------------------------------------------------------
 
-    return PCK10, PCK05
-
-def GetMedian(ErrorList):
-    """Given List of errors, calculate RMSE"""
-    ErrorList = [x for x in ErrorList if x == x] #trick to remove NANs, because nan != nan
-
-    Out = statistics.median(ErrorList)
-
-    return Out
-
-
-def GetPCKSum(PCKList):
-    PCKList = [x for x in PCKList if x == x]
-
-    return (sum(PCKList)/len(PCKList))*100
-
-
-def GetRMSE(ErrorList):
-    """Given List of errors, calculate RMSE"""
-    ErrorList = [x for x in ErrorList if x == x] #trick to remove NANs, because nan != nan
-    # import ipdb;ipdb.set_trace()
-    Out = np.sqrt(np.mean(np.array(ErrorList)**2))
-    # Out = np.mean(np.array(ErrorList))
-    return Out
-
-def MatchID(SequenceObj,CamObj, Predictions, counter = None):
-    """Given tracking output IDS (0-9) and bird IDs from 3D POP, find a frame and match them up"""
-    # import ipdb;ipdb.set_trace()
-    if counter == None:
-        counter = 0
-
-    MatchedDict = {}
+def MatchID(sequence, cam, predictions):
+    counter = 0
     while True:
-        # print(counter)
-        if counter <5:
-            counter += 1
-            continue
-
-
-        if counter not in Predictions:
-            counter +=1
-            continue
-
-        FramePred = Predictions[counter]
-        GTDict = {}
-        for bird in SequenceObj.Subjects:
-            GTDict[bird] = list(CamObj.Read3DKeypointData(CamObj.Keypoint3D, counter, bird, Keypoints = ["bp_bottomKeel"]).values())[0]
-        if np.isnan(list(GTDict.values())).any(): ##Some of the points is nan
-            counter += 1
-            continue
-
-        # import ipdb;ipdb.set_trace()
-        try:
-            PredDict = {k.split("_")[0]:v.tolist() for k,v in FramePred.items() if "bp_bottomKeel" in k}
-        except:
-            counter +=1
-            continue
-
-        PredNP = np.array(list(PredDict.values()))
-        GTNP = np.array(list(GTDict.values()))
-
-        DistanceMatrix = cdist(GTNP, PredNP)
-
-        # HungarianAlgorithm
-        Matches = HungarianAlgorithm.hungarian_algorithm(DistanceMatrix)
-        BirdIDs = list(GTDict.keys())
-        PredIDs = list(PredDict.keys())
-
-        MatchedDict = {}
-        for match in Matches:
-            MatchedDict[BirdIDs[match[0]]] = PredIDs[match[1]]
-
-        break
-
-    return MatchedDict
-
-def RMSESummaryDict(RMSEDictList,Keypoints, filter = False):
-    """Given dictionary of euc errors, process and get dict of errors"""
-
-    ##Prepare dictionary for per keypoint error:
-    PerKeypointDict = {}
-    for key in Keypoints:
-        PerKeypointDict[key] = []
-
-    AllPointsList = []
-    # import ipdb;ipdb.set_trace()
-    IndividualFilterCounter = 0
-    TotalIndividualsCounter = 0
-
-    # import ipdb;ipdb.set_trace()
-    for i in range(len(RMSEDictList)):
-        FrameDict = RMSEDictList[i]
-
-        for PointsDict in FrameDict.values():
-            TotalIndividualsCounter += 1
-            MeanVal = np.array(list(PointsDict.values())).mean()
-            if filter:
-                if MeanVal > filter:
-                    IndividualFilterCounter += 1
-                    continue
-
-            for k,v in PointsDict.items():
-                PerKeypointDict[k].append(v)
-                AllPointsList.append(v)
-
-    #print(IndividualFilterCounter)
-    #print("Total Individuals: %s"%TotalIndividualsCounter)
-
-    return PerKeypointDict, AllPointsList
-
-
-def RMSESummary(RMSEDictList,Keypoints):
-    """Given dictionary of euc errors, process and print RMSE MPJEs"""
-
-    ##Prepare dictionary for per keypoint error:
-    PerKeypointDict = {}
-    for key in Keypoints:
-        PerKeypointDict[key] = []
-
-    AllPointsList = []
-    for i in range(len(RMSEDictList)):
-        FrameDict = RMSEDictList[i]
-
-        for PointsDict in FrameDict.values():
-            for k,v in PointsDict.items():
-                PerKeypointDict[k].append(v)
-                AllPointsList.append(v)
-
-    ##Calc RMSE
-    for Key,Val in PerKeypointDict.items():
-        RMSE = GetRMSE(Val)
-        print(Key + ":")
-        print(RMSE)
-
-    print("Overall RMSE:")
-    print(GetRMSE(AllPointsList))
-
-
-def PCKSummary(PCKDictList, Keypoints):
-    """Given dictionary of PCKs, process and print PCK"""
-    PerKeypointDict = {}
-    for key in Keypoints:
-        PerKeypointDict[key] = []
-
-    AllPointsList = []
-    for i in range(len(PCKDictList)):
-        FrameDict = PCKDictList[i]
-
-        for PointsDict in FrameDict.values():
-            for k,v in PointsDict.items():
-                PerKeypointDict[k].append(v)
-                AllPointsList.append(v)
-    ##Calc PCK
-    for Key,Val in PerKeypointDict.items():
-        PCK = GetPCKSum(Val)
-        print(Key + ":")
-        print(PCK)
-
-    print("Overall PCK:")
-    print( GetPCKSum(AllPointsList))
-
-
-def DoEval3D(DatasetPath, SeqNum,Predictions3D):
-    """do evaluation, only for 3D"""
-    SequenceObj = Trial.Trial(DatasetPath,SeqNum)
-    SequenceObj.load3DPopTrainingSet(Filter = True, Type = "Test")
-    CamObj = SequenceObj.camObjects[0] #Just use one of the cam objects
-    FrameNums = Predictions3D.keys()
-
-    #Match corresponding IDs
-    # import ipdb;ipdb.set_trace()
-    MatchedDict = MatchID(SequenceObj,CamObj, Predictions3D)
-    EucErrorList3D = []
-    PCK05List3D = []
-    PCK10List3D = []
-
-
-    for i in tqdm(FrameNums):
-        # MatchedDict = MatchID(SequenceObj,CamObj, Predictions3D,i)
-
-        # GTDict = CamObj.Load3DKeypoint(CamObj.Keypoint3D, i)
-        FramePred3D = Predictions3D[i]
-        EucErrorDict3D = {}
-        PCK05Dict3D = {}
-        PCK10Dict3D = {}
-
-
-        for GTID, PredID in MatchedDict.items(): #for each bird
-            Bird3DGT = CamObj.Read3DKeypointData(CamObj.Keypoint3D, i, GTID,Keypoints = PIGEON_KEYPOINT_NAMES,StripName=True)
-            #print(Bird3DGT)
-            Bird3DPred = {"_".join(k.split("_")[1:3]):v for k,v in FramePred3D.items() if k.startswith(PredID)}
-
-            #### DO 3D EVALUATION
-            ##Find max distance between any keypoints for PCK
-            DistList = []
-            for pair in itertools.product(list(Bird3DGT.values()),repeat=2):
-                DistList.append(GetEucDist(pair[0],pair[1]))
-
-            MaxDist = max(DistList)
-            BirdEucErrorDict3D = {}
-            BirdPCK10Dict3D = {}
-            BirdPCK05Dict3D = {}
-
-            for kp in PIGEON_KEYPOINT_NAMES:
-
-                if np.isnan(np.array(list(Bird3DGT.values()))).any(): ##if there is any nan
-                    # print("wow")
-                    PointDist = np.nan
-                    PCK10 = np.nan
-                    PCK05 = np.nan
-                elif kp not in Bird3DPred:
-                    PointDist = np.nan
-                    PCK10 = np.nan
-                    PCK05 = np.nan
-                else:
-                    GTval = Bird3DGT[kp]
-                    PredVal = Bird3DPred[kp]
-                    # import ipdb;ipdb.set_trace()
-                    if np.isnan(PredVal).any() or np.isnan(GTval).any():
-                        PointDist = np.nan
-                        PCK10 = np.nan
-                        PCK05 = np.nan
-                    else:
-                        PointDist = GetEucDist(GTval,PredVal)
-                        PCK10,PCK05 = GetPCK(PointDist,MaxDist)
-
-
-                BirdEucErrorDict3D[kp] = PointDist
-                BirdPCK10Dict3D[kp] = PCK10
-                BirdPCK05Dict3D[kp] = PCK05
-
-            EucErrorDict3D[GTID] = BirdEucErrorDict3D
-            PCK10Dict3D[GTID] = BirdPCK10Dict3D
-            PCK05Dict3D[GTID] = BirdPCK05Dict3D
-
-        # import ipdb;ipdb.set_trace()
-
-        EucErrorList3D.append(EucErrorDict3D)
-        PCK10List3D.append(PCK10Dict3D)
-        PCK05List3D.append(PCK05Dict3D)
-
-
-    return EucErrorList3D,PCK10List3D,PCK05List3D
-
-
-def DoEval(DatasetPath, SeqNum,Predictions3D,Predictions2D):
-    """do evaluation for 3D"""
-    SequenceObj = Trial.Trial(DatasetPath,SeqNum)
-    SequenceObj.load3DPopTrainingSet(Filter = True, Type = "Test")
-    CamObj = SequenceObj.camObjects[0] #Just use one of the cam objects
-    FrameNums = Predictions3D.keys()
-
-    #Match corresponding IDs
-    MatchedDict = MatchID(SequenceObj,CamObj, Predictions3D)
-    EucErrorList3D = []
-    PCK05List3D = []
-    PCK10List3D = []
-    EucErrorList2D = []
-    PCK05List2D = []
-    PCK10List2D = []
-
-
-
-    for i in tqdm(FrameNums):
-        # GTDict = CamObj.Load3DKeypoint(CamObj.Keypoint3D, i)
-        FramePred3D = Predictions3D[i]
-        FramePred2D = Predictions2D[i]
-        EucErrorDict3D = {}
-        PCK05Dict3D = {}
-        PCK10Dict3D = {}
-        EucErrorDict2D = {}
-        PCK05Dict2D = {}
-        PCK10Dict2D = {}
-
-        for GTID, PredID in MatchedDict.items(): #for each bird
-            Bird3DGT = CamObj.Read3DKeypointData(CamObj.Keypoint3D, i, GTID,Keypoints = PIGEON_KEYPOINT_NAMES,StripName=True)
-            Bird3DPred = {"_".join(k.split("_")[1:3]):v for k,v in FramePred3D.items() if k.startswith(PredID)}
-
-            #### DO 3D EVALUATION
-            ##Find max distance between any keypoints for PCK
-            DistList = []
-            for pair in itertools.product(list(Bird3DGT.values()),repeat=2):
-                DistList.append(GetEucDist(pair[0],pair[1]))
-
-            MaxDist = max(DistList)
-            BirdEucErrorDict3D = {}
-            BirdPCK10Dict3D = {}
-            BirdPCK05Dict3D = {}
-
-            for kp in PIGEON_KEYPOINT_NAMES:
-
-                if kp not in Bird3DPred:
-                    PointDist = np.nan
-                    PCK10 = np.nan
-                    PCK05 = np.nan
-                else:
-                    GTval = Bird3DGT[kp]
-                    PredVal = Bird3DPred[kp]
-                    # import ipdb;ipdb.set_trace()
-                    if np.isnan(PredVal).any() or np.isnan(GTval).any():
-                        PointDist = np.nan
-                        PCK10 = np.nan
-                        PCK05 = np.nan
-                    else:
-                        PointDist = GetEucDist(GTval,PredVal)
-                        PCK10,PCK05 = GetPCK(PointDist,MaxDist)
-
-                # if PointDist > 1000:
-                #     print(SeqNum)
-                #     import ipdb;ipdb.set_trace()
-
-
-                BirdEucErrorDict3D[kp] = PointDist
-                BirdPCK10Dict3D[kp] = PCK10
-                BirdPCK05Dict3D[kp] = PCK05
-
-
-            ### DO 2D EVALUATION
-            for camObj in SequenceObj.camObjects:
-                CamName = camObj.CamName
-                if CamName not in FramePred2D:
-                    continue
-
-                Bird2DGT = camObj.Read2DKeypointData(camObj.Keypoint2D, i, GTID,Keypoints = PIGEON_KEYPOINT_NAMES,StripName=True)
-
-
-                Bird2DPred = {"_".join(k.split("_")[1:3]):v for k,v in FramePred2D[CamName].items() if k.startswith(PredID)}
-                Bird2DBBox = camObj.GetBBoxData(camObj.BBox ,i,GTID )
-
-                ##Max dimension of bbox
-                MaxDist = max([Bird2DBBox[1][0]-Bird2DBBox[0][0], Bird2DBBox[1][1]-Bird2DBBox[0][1]])
-                BirdEucErrorDict2D = {}
-                BirdPCK10Dict2D = {}
-                BirdPCK05Dict2D = {}
-
-                for kp in PIGEON_KEYPOINT_NAMES:
-                    if kp not in Bird2DPred:
-                        PointDist = np.nan
-                        PCK10 = np.nan
-                        PCK05 = np.nan
-                    else:
-                        GTval = Bird2DGT[kp]
-                        PredVal = Bird2DPred[kp]
-                        # import ipdb;ipdb.set_trace()
-                        if np.isnan(PredVal).any() or np.isnan(GTval).any():
-                            PointDist = np.nan
-                            PCK10 = np.nan
-                            PCK05 = np.nan
-                        else:
-                            PointDist = GetEucDist(GTval,PredVal)
-                            PCK10,PCK05 = GetPCK(PointDist,MaxDist)
-
-
-
-                    BirdEucErrorDict2D[kp] = PointDist
-                    BirdPCK10Dict2D[kp] = PCK10
-                    BirdPCK05Dict2D[kp] = PCK05
-
-                EucErrorDict2D["%s_%s"%(CamName,GTID)] = BirdEucErrorDict2D
-                PCK10Dict2D["%s_%s"%(CamName,GTID)] = BirdPCK10Dict2D
-                PCK05Dict2D["%s_%s"%(CamName,GTID)] = BirdPCK05Dict2D
-
-
-            EucErrorDict3D[GTID] = BirdEucErrorDict3D
-            PCK10Dict3D[GTID] = BirdPCK10Dict3D
-            PCK05Dict3D[GTID] = BirdPCK05Dict3D
-
-
-        # import ipdb;ipdb.set_trace()
-
-        EucErrorList3D.append(EucErrorDict3D)
-        PCK10List3D.append(PCK10Dict3D)
-        PCK05List3D.append(PCK05Dict3D)
-
-        EucErrorList2D.append(EucErrorDict2D)
-        PCK10List2D.append(PCK10Dict2D)
-        PCK05List2D.append(PCK05Dict2D)
-
-
-    return EucErrorList3D,PCK10List3D,PCK05List3D, EucErrorList2D, PCK10List2D,PCK05List2D
-
-def PCKSummaryDict(PCKDictList, Keypoints):
-    """Given dictionary of PCKs, process and return PCK dicts"""
-    PerKeypointDict = {}
-    for key in Keypoints:
-        PerKeypointDict[key] = []
-
-    AllPointsList = []
-    for i in range(len(PCKDictList)):
-        FrameDict = PCKDictList[i]
-
-        for PointsDict in FrameDict.values():
-            for k,v in PointsDict.items():
-                PerKeypointDict[k].append(v)
-                AllPointsList.append(v)
-
-    return PerKeypointDict, AllPointsList
-
-def GetSummaryCSV(EvalDir,Models,AllSequences, Type = "3D"):
-    EucDFDict = {}
-    PCK10DFDict = {}
-    PCK05DFDict = {}
-    MedianDFDict = {}
-    counter = 0
-
-    # import ipdb;ipdb.set_trace()
-    for ModelName in Models:
-        AllEucErrorList = []
-        AllPCK10List = []
-        AllPCK05List = []
-
-        for SeqNum in AllSequences:
-            if Type == "3D":
-                EucErrorList = pickle.load(open(os.path.join(EvalDir,"%s_Seq%s_3D_EucError.p"%(ModelName,SeqNum)),"rb"))
-                PCK10List = pickle.load(open(os.path.join(EvalDir,"%s_Seq%s_3D_PCK10.p"%(ModelName,SeqNum)),"rb"))
-                PCK05List = pickle.load(open(os.path.join(EvalDir,"%s_Seq%s_3D_PCK05.p"%(ModelName,SeqNum)),"rb"))
-            elif Type == "2D":
-                EucErrorList = pickle.load(open(os.path.join(EvalDir,"%s_Seq%s_2D_EucError.p"%(ModelName,SeqNum)),"rb"))
-                PCK10List = pickle.load(open(os.path.join(EvalDir,"%s_Seq%s_2D_PCK10.p"%(ModelName,SeqNum)),"rb"))
-                PCK05List = pickle.load(open(os.path.join(EvalDir,"%s_Seq%s_2D_PCK05.p"%(ModelName,SeqNum)),"rb"))
-
-            # print(EucErrorList)
-            # import ipdb;ipdb.set_trace()
-
-            AllEucErrorList.extend(EucErrorList)
-            AllPCK10List.extend(PCK10List)
-            AllPCK05List.extend(PCK05List)
-
-        ###Save to CSV
-        ModelEucDict = {"Model":ModelName}
-        PerKeypointDictEuc, AllPointsListEuc = RMSESummaryDict(AllEucErrorList,PIGEON_KEYPOINT_NAMES,filter=False)
-        ModelEucDict["Overall"] = GetRMSE(AllPointsListEuc)
-        for Key,Val in PerKeypointDictEuc.items():
-            RMSE = GetRMSE(Val)
-            ModelEucDict.update({Key:RMSE})
-        EucDFDict[counter] = ModelEucDict
-
-        ##Median
-        ModelMedDict = {"Model":ModelName}
-        PerKeypointDictEuc, AllPointsListEuc = RMSESummaryDict(AllEucErrorList,PIGEON_KEYPOINT_NAMES,filter=False)
-        ModelMedDict.update({"Overall":GetMedian(AllPointsListEuc)})
-        for Key,Val in PerKeypointDictEuc.items():
-            RMSE = GetMedian(Val)
-            ModelMedDict.update({Key:RMSE})
-        MedianDFDict[counter]= ModelMedDict
-
-        #PCK10:
-        ModelPCK10Dict = {"Model":ModelName}
-        PerKeypointDictPCK10, AllPointsListPCK10 = PCKSummaryDict(AllPCK10List,PIGEON_KEYPOINT_NAMES)
-        ModelPCK10Dict.update({"Overall":GetPCKSum(AllPointsListPCK10)})
-        for Key,Val in PerKeypointDictPCK10.items():
-            PCK = GetPCKSum(Val)
-            ModelPCK10Dict.update({Key:PCK})
-        PCK10DFDict[counter] = ModelPCK10Dict
-
-        #PCK05
-        ModelPCK05Dict = {"Model":ModelName}
-        PerKeypointDictPCK05, AllPointsListPCK05 = PCKSummaryDict(AllPCK05List,PIGEON_KEYPOINT_NAMES)
-        ModelPCK05Dict.update({"Overall":GetPCKSum(AllPointsListPCK05)})
-        for Key,Val in PerKeypointDictPCK05.items():
-            PCK = GetPCKSum(Val)
-            ModelPCK05Dict.update({Key:PCK})
-        PCK05DFDict[counter] = ModelPCK05Dict
-
         counter += 1
-
-    # import ipdb;ipdb.set_trace()
-    EucDF = pd.DataFrame.from_dict(EucDFDict,orient= "index")
-    EucDF.to_csv(os.path.join(EvalDir,"Seq_EvaluationSummary/EucErrorSummary%s.csv"%Type))
-
-    PCK10DF = pd.DataFrame.from_dict(PCK10DFDict,orient= "index")
-    PCK10DF.to_csv(os.path.join(EvalDir,"Seq_EvaluationSummary/PCK10Summary%s.csv"%Type))
-
-    PCK05DF = pd.DataFrame.from_dict(PCK05DFDict,orient= "index")
-    PCK05DF.to_csv(os.path.join(EvalDir,"Seq_EvaluationSummary/PCK05Summary%s.csv"%Type))
-
-    MedianDF = pd.DataFrame.from_dict(MedianDFDict,orient= "index")
-    MedianDF.to_csv(os.path.join(EvalDir,"Seq_EvaluationSummary/MedianSummary%s.csv"%Type))
-
-def GetIndNumSummaryCSV(EvalDir,Models,AllSequences, Type = "3D"):
-    EucDFDict = {}
-    PCK10DFDict = {}
-    PCK05DFDict = {}
-    MedianDFDict = {}
-    counter = 0
-
-    # import ipdb;ipdb.set_trace()
-    for ModelName in Models:
-        AllEucErrorList = []
-        AllPCK10List = []
-        AllPCK05List = []
-
-        for SeqNum in AllSequences:
-            if Type == "3D":
-                EucErrorList = pickle.load(open(os.path.join(EvalDir,"%s_Seq%s_3D_EucError.p"%(ModelName,SeqNum)),"rb"))
-                PCK10List = pickle.load(open(os.path.join(EvalDir,"%s_Seq%s_3D_PCK10.p"%(ModelName,SeqNum)),"rb"))
-                PCK05List = pickle.load(open(os.path.join(EvalDir,"%s_Seq%s_3D_PCK05.p"%(ModelName,SeqNum)),"rb"))
-            elif Type == "2D":
-                EucErrorList = pickle.load(open(os.path.join(EvalDir,"%s_Seq%s_2D_EucError.p"%(ModelName,SeqNum)),"rb"))
-                PCK10List = pickle.load(open(os.path.join(EvalDir,"%s_Seq%s_2D_PCK10.p"%(ModelName,SeqNum)),"rb"))
-                PCK05List = pickle.load(open(os.path.join(EvalDir,"%s_Seq%s_2D_PCK05.p"%(ModelName,SeqNum)),"rb"))
-
-            # print(EucErrorList)
-            # import ipdb;ipdb.set_trace()
-
-            AllEucErrorList = EucErrorList
-            AllPCK10List = PCK10List
-            AllPCK05List = PCK05List
-
-            ###Save to CSV
-            ModelEucDict = {"Model":ModelName,"Seq":SeqNum}
-            PerKeypointDictEuc, AllPointsListEuc = RMSESummaryDict(AllEucErrorList,PIGEON_KEYPOINT_NAMES,filter=False)
-            ModelEucDict["Overall"] = GetRMSE(AllPointsListEuc)
-            for Key,Val in PerKeypointDictEuc.items():
-                RMSE = GetRMSE(Val)
-                ModelEucDict.update({Key:RMSE})
-            EucDFDict[counter] = ModelEucDict
-
-            ##Median
-            ModelMedDict = {"Model":ModelName, "Seq":SeqNum}
-            PerKeypointDictEuc, AllPointsListEuc = RMSESummaryDict(AllEucErrorList,PIGEON_KEYPOINT_NAMES,filter=False)
-            ModelMedDict.update({"Overall":GetMedian(AllPointsListEuc)})
-            for Key,Val in PerKeypointDictEuc.items():
-                RMSE = GetMedian(Val)
-                ModelMedDict.update({Key:RMSE})
-            MedianDFDict[counter]= ModelMedDict
-
-            #PCK10:
-            ModelPCK10Dict = {"Model":ModelName, "Seq":SeqNum}
-            PerKeypointDictPCK10, AllPointsListPCK10 = PCKSummaryDict(AllPCK10List,PIGEON_KEYPOINT_NAMES)
-            ModelPCK10Dict.update({"Overall":GetPCKSum(AllPointsListPCK10)})
-            for Key,Val in PerKeypointDictPCK10.items():
-                PCK = GetPCKSum(Val)
-                ModelPCK10Dict.update({Key:PCK})
-            PCK10DFDict[counter] = ModelPCK10Dict
-
-            #PCK05
-            ModelPCK05Dict = {"Model":ModelName, "Seq":SeqNum}
-            PerKeypointDictPCK05, AllPointsListPCK05 = PCKSummaryDict(AllPCK05List,PIGEON_KEYPOINT_NAMES)
-            ModelPCK05Dict.update({"Overall":GetPCKSum(AllPointsListPCK05)})
-            for Key,Val in PerKeypointDictPCK05.items():
-                PCK = GetPCKSum(Val)
-                ModelPCK05Dict.update({Key:PCK})
-            PCK05DFDict[counter] = ModelPCK05Dict
-
-            counter += 1
-
-    # import ipdb;ipdb.set_trace()
-    EucDF = pd.DataFrame.from_dict(EucDFDict,orient= "index")
-    EucDF.to_csv(os.path.join(EvalDir,"Seq_EvaluationSummary/Ind_EucErrorSummary%s.csv"%Type))
-
-    PCK10DF = pd.DataFrame.from_dict(PCK10DFDict,orient= "index")
-    PCK10DF.to_csv(os.path.join(EvalDir,"Seq_EvaluationSummary/Ind_PCK10Summary%s.csv"%Type))
-
-    PCK05DF = pd.DataFrame.from_dict(PCK05DFDict,orient= "index")
-    PCK05DF.to_csv(os.path.join(EvalDir,"Seq_EvaluationSummary/Ind_PCK05Summary%s.csv"%Type))
-
-    MedianDF = pd.DataFrame.from_dict(MedianDFDict,orient= "index")
-    MedianDF.to_csv(os.path.join(EvalDir,"Seq_EvaluationSummary/Ind_MedianSummary%s.csv"%Type))
-
-
-def RunParallel(EvalDir, DatasetPath,file3d):
-    _, _, ModelName, SeqNum= file3d.split("_")
-    SeqNum = SeqNum.split(".")[0].split("Seq")[1]
-
-    print("Seq: %s, Model: %s"%(SeqNum,ModelName))
-
-    # if os.path.exists(os.path.join(EvalDir,"%s_Seq%s_3D_EucError.p"%(ModelName,SeqNum))):
-    #     return False
-
-    if ModelName == "ltohp" or ModelName == "MvP":
-        Predictions3D= pickle.load(open(os.path.join(EvalDir,file3d ), "rb"))
-        EucErrorList3D,PCK10List3D,PCK05List3D = DoEval3D(DatasetPath, SeqNum,Predictions3D)
-        pickle.dump(EucErrorList3D, open(os.path.join(EvalDir,"%s_Seq%s_3D_EucError.p"%(ModelName,SeqNum)),"wb"))
-        pickle.dump(PCK10List3D, open(os.path.join(EvalDir,"%s_Seq%s_3D_PCK10.p"%(ModelName,SeqNum)),"wb"))
-        pickle.dump(PCK05List3D, open(os.path.join(EvalDir,"%s_Seq%s_3D_PCK05.p"%(ModelName,SeqNum)),"wb"))
-
-        return True
-
-    Predictions3D= pickle.load(open(os.path.join(EvalDir,file3d ), "rb"))
-    Predictions2D = pickle.load(open(os.path.join(EvalDir,"SeqEval_Points2D_%s_Seq%s.pkl"%(ModelName,SeqNum) ), "rb"))
-
-    EucErrorList3D,PCK10List3D,PCK05List3D, EucErrorList2D, PCK10List2D,PCK05List2D = DoEval(DatasetPath, SeqNum,Predictions3D,Predictions2D)
-
-    pickle.dump(EucErrorList3D, open(os.path.join(EvalDir,"%s_Seq%s_3D_EucError.p"%(ModelName,SeqNum)),"wb"))
-    pickle.dump(PCK10List3D, open(os.path.join(EvalDir,"%s_Seq%s_3D_PCK10.p"%(ModelName,SeqNum)),"wb"))
-    pickle.dump(PCK05List3D, open(os.path.join(EvalDir,"%s_Seq%s_3D_PCK05.p"%(ModelName,SeqNum)),"wb"))
-
-    pickle.dump(EucErrorList2D, open(os.path.join(EvalDir,"%s_Seq%s_2D_EucError.p"%(ModelName,SeqNum)),"wb"))
-    pickle.dump(PCK10List2D, open(os.path.join(EvalDir,"%s_Seq%s_2D_PCK10.p"%(ModelName,SeqNum)),"wb"))
-    pickle.dump(PCK05List2D, open(os.path.join(EvalDir,"%s_Seq%s_2D_PCK05.p"%(ModelName,SeqNum)),"wb"))
-
-
-    return True
-
-
-def runEvaluation(EvalDir,DatasetPath, Models3D, Models2D, AllSequences):
-    
-    os.mkdir(os.path.join(EvalDir,"Seq_EvaluationSummary"))
-
-    PickleFiles = [os.path.basename(file) for file in glob(EvalDir + "/*.p")]
-    #### 3D + 2D evaluation:
-    Files3D = [file for file in PickleFiles if "RollingFilter3D" in file]
-    # Files3D = [file for file in PickleFiles if "Filtered3D" in file]
-    # import ipdb;ipdb.set_trace()
-    for file3d in Files3D:
-        RunParallel(EvalDir,DatasetPath,file3d)
-
-
-    # # import ipdb;ipdb.set_trace()
-    for file3d in Files3D:
-        # file3d = Files3D[len(Files3D)-1]
-        _, _, ModelName, SeqNum= file3d.split("_")
-        SeqNum = SeqNum.split(".")[0].split("Seq")[1]
-
-        print("Seq: %s, Model: %s"%(SeqNum,ModelName))
-
-        # if os.path.exists(os.path.join(EvalDir,"%s_Seq%s_3D_EucError.p"%(ModelName,SeqNum))):
-            # continue
-        if ModelName == "ltohp" or ModelName == "MvP":
-            Predictions3D= pickle.load(open(os.path.join(EvalDir,file3d ), "rb"))
-            EucErrorList3D,PCK10List3D,PCK05List3D = DoEval3D(DatasetPath, SeqNum,Predictions3D)
-            pickle.dump(EucErrorList3D, open(os.path.join(EvalDir,"%s_Seq%s_3D_EucError.p"%(ModelName,SeqNum)),"wb"))
-            pickle.dump(PCK10List3D, open(os.path.join(EvalDir,"%s_Seq%s_3D_PCK10.p"%(ModelName,SeqNum)),"wb"))
-            pickle.dump(PCK05List3D, open(os.path.join(EvalDir,"%s_Seq%s_3D_PCK05.p"%(ModelName,SeqNum)),"wb"))
-
+        if counter not in predictions:
             continue
 
+        gt = {bird: list(cam.Read3DKeypointData(cam.Keypoint3D, counter, bird, Keypoints=["bp_bottomKeel"]).values())[0]
+              for bird in sequence.Subjects}
 
-        Predictions3D= pickle.load(open(os.path.join(EvalDir,file3d ), "rb"))
-        Predictions2D = pickle.load(open(os.path.join(EvalDir,"SeqEval_Points2D_%s_Seq%s.p"%(ModelName,SeqNum) ), "rb"))
+        if np.isnan(list(gt.values())).any():
+            continue
 
-        EucErrorList3D,PCK10List3D,PCK05List3D, EucErrorList2D, PCK10List2D,PCK05List2D = DoEval(DatasetPath, SeqNum,Predictions3D,Predictions2D)
+        try:
+            pred = {k.split("_")[0]: v.tolist() for k,v in predictions[counter].items() if "bp_bottomKeel" in k}
+        except Exception:
+            continue
 
-        pickle.dump(EucErrorList3D, open(os.path.join(EvalDir,"%s_Seq%s_3D_EucError.p"%(ModelName,SeqNum)),"wb"))
-        pickle.dump(PCK10List3D, open(os.path.join(EvalDir,"%s_Seq%s_3D_PCK10.p"%(ModelName,SeqNum)),"wb"))
-        pickle.dump(PCK05List3D, open(os.path.join(EvalDir,"%s_Seq%s_3D_PCK05.p"%(ModelName,SeqNum)),"wb"))
+        dist = cdist(np.array(list(gt.values())), np.array(list(pred.values())))
+        matches = HungarianAlgorithm.hungarian_algorithm(dist)
+        gt_ids = list(gt.keys())
+        pred_ids = list(pred.keys())
+        return {gt_ids[m[0]]: pred_ids[m[1]] for m in matches}
 
-        pickle.dump(EucErrorList2D, open(os.path.join(EvalDir,"%s_Seq%s_2D_EucError.p"%(ModelName,SeqNum)),"wb"))
-        pickle.dump(PCK10List2D, open(os.path.join(EvalDir,"%s_Seq%s_2D_PCK10.p"%(ModelName,SeqNum)),"wb"))
-        pickle.dump(PCK05List2D, open(os.path.join(EvalDir,"%s_Seq%s_2D_PCK05.p"%(ModelName,SeqNum)),"wb"))
+# ---------------------------------------------------------------------
+# Evaluation (3D + 2D)
+# ---------------------------------------------------------------------
 
+def DoEval(dataset_path, seq, preds_3d, preds_2d=None):
+    seq_obj = Trial.Trial(dataset_path, seq)
+    seq_obj.load3DPopTrainingSet(Filter=True, Type="Test")
+    cam0 = seq_obj.camObjects[0]
+
+    matched = MatchID(seq_obj, cam0, preds_3d)
+
+    E3D, P10_3D, P05_3D = [], [], []
+    E2D, P10_2D, P05_2D = [], [], []
+
+    for f in tqdm(preds_3d.keys(), desc="Seq "+str(seq)):
+        fe3d, f103d, f053d = {}, {}, {}
+        fe2d, f102d, f052d = {}, {}, {}
+
+        for gt_id, pred_id in matched.items():
+            gt3d = cam0.Read3DKeypointData(cam0.Keypoint3D, f, gt_id, Keypoints=PIGEON_KEYPOINT_NAMES, StripName=True)
+            pred3d = {"_".join(k.split("_")[1:3]):v for k,v in preds_3d[f].items() if k.startswith(pred_id)}
+
+            max_dist_3d = max(GetEucDist(a,b) for a,b in itertools.product(gt3d.values(), repeat=2))
+
+            be3d, b103d, b053d = {}, {}, {}
+            for kp in PIGEON_KEYPOINT_NAMES:
+                if kp not in pred3d or np.isnan(pred3d[kp]).any() or np.isnan(gt3d[kp]).any():
+                    d = p10 = p05 = np.nan
+                else:
+                    d = GetEucDist(gt3d[kp], pred3d[kp])
+                    p10, p05 = GetPCK(d, max_dist_3d)
+                be3d[kp] = d; b103d[kp] = p10; b053d[kp] = p05
+            fe3d[gt_id] = be3d; f103d[gt_id] = b103d; f053d[gt_id] = b053d
+
+            if preds_2d:
+                for cam in seq_obj.camObjects:
+                    cname = cam.CamName
+                    if cname not in preds_2d[f]:
+                        continue
+                    gt2d = cam.Read2DKeypointData(cam.Keypoint2D, f, gt_id, Keypoints=PIGEON_KEYPOINT_NAMES, StripName=True)
+                    pred2d = {"_".join(k.split("_")[1:3]):v for k,v in preds_2d[f][cname].items() if k.startswith(pred_id)}
+                    bbox = cam.GetBBoxData(cam.BBox, f, gt_id)
+                    max_dist_2d = max(bbox[1][0]-bbox[0][0], bbox[1][1]-bbox[0][1])
+                    be2d, b102d, b052d = {}, {}, {}
+                    for kp in PIGEON_KEYPOINT_NAMES:
+                        if kp not in pred2d or np.isnan(pred2d[kp]).any() or np.isnan(gt2d[kp]).any():
+                            d = p10 = p05 = np.nan
+                        else:
+                            d = GetEucDist(gt2d[kp], pred2d[kp])
+                            p10, p05 = GetPCK(d, max_dist_2d)
+                        be2d[kp] = d; b102d[kp] = p10; b052d[kp] = p05
+                    key = f"{cname}_{gt_id}"
+                    fe2d[key] = be2d; f102d[key] = b102d; f052d[key] = b052d
+
+        E3D.append(fe3d); P10_3D.append(f103d); P05_3D.append(f053d)
+        E2D.append(fe2d); P10_2D.append(f102d); P05_2D.append(f052d)
+
+    return E3D, P10_3D, P05_3D, E2D, P10_2D, P05_2D
+
+# ---------------------------------------------------------------------
+# CSV summaries
+# ---------------------------------------------------------------------
+
+def RMSESummaryDict(RMSEDictList):
+    all_vals, per_kp = [], {k: [] for k in PIGEON_KEYPOINT_NAMES}
+    for frame in RMSEDictList:
+        for bird in frame.values():
+            for k,v in bird.items():
+                per_kp[k].append(v)
+                all_vals.append(v)
+    return per_kp, all_vals
+
+def PCKSummaryDict(PCKDictList):
+    all_vals, per_kp = [], {k: [] for k in PIGEON_KEYPOINT_NAMES}
+    for frame in PCKDictList:
+        for bird in frame.values():
+            for k,v in bird.items():
+                per_kp[k].append(v)
+                all_vals.append(v)
+    return per_kp, all_vals
+
+def GetSummaryCSV(EvalDir, Models, Seqs, Type="3D"):
+    rows_e, rows_m, rows_10, rows_05 = {}, {}, {}, {}
+    idx = 0
+    for m in Models:
+        all_e, all_10, all_05 = [], [], []
+        for s in Seqs:
+            all_e += pickle.load(open(os.path.join(EvalDir, f"{m}_Seq{s}_{Type}_EucError.p"), "rb"))
+            all_10 += pickle.load(open(os.path.join(EvalDir, f"{m}_Seq{s}_{Type}_PCK10.p"), "rb"))
+            all_05 += pickle.load(open(os.path.join(EvalDir, f"{m}_Seq{s}_{Type}_PCK05.p"), "rb"))
+        kp_e, vals = RMSESummaryDict(all_e)
+        kp10, v10 = PCKSummaryDict(all_10)
+        kp05, v05 = PCKSummaryDict(all_05)
+        rows_e[idx] = {"Model": m, "Overall": GetRMSE(vals), **{k:GetRMSE(v) for k,v in kp_e.items()}}
+        rows_m[idx] = {"Model": m, "Overall": GetMedian(vals), **{k:GetMedian(v) for k,v in kp_e.items()}}
+        rows_10[idx] = {"Model": m, "Overall": GetPCKSum(v10), **{k:GetPCKSum(v) for k,v in kp10.items()}}
+        rows_05[idx] = {"Model": m, "Overall": GetPCKSum(v05), **{k:GetPCKSum(v) for k,v in kp05.items()}}
+        idx += 1
+    out = os.path.join(EvalDir, "Seq_EvaluationSummary")
+    pd.DataFrame.from_dict(rows_e, orient="index").to_csv(os.path.join(out, f"EucErrorSummary{Type}.csv"))
+    pd.DataFrame.from_dict(rows_m, orient="index").to_csv(os.path.join(out, f"MedianSummary{Type}.csv"))
+    pd.DataFrame.from_dict(rows_10, orient="index").to_csv(os.path.join(out, f"PCK10Summary{Type}.csv"))
+    pd.DataFrame.from_dict(rows_05, orient="index").to_csv(os.path.join(out, f"PCK05Summary{Type}.csv"))
     
-    GetSummaryCSV(EvalDir,Models3D,AllSequences, Type = "3D")
-    GetIndNumSummaryCSV(EvalDir,Models3D,AllSequences, Type = "3D")
+def GetIndNumSummaryCSV(EvalDir, Models, AllSequences, Type="3D"):
+    EucDFDict, PCK10DFDict, PCK05DFDict, MedianDFDict = {}, {}, {}, {}
+    counter = 0
+
+    for model in Models:
+        for seq in AllSequences:
+            euc = pickle.load(open(os.path.join(EvalDir, f"{model}_Seq{seq}_{Type}_EucError.p"), "rb"))
+            pck10 = pickle.load(open(os.path.join(EvalDir, f"{model}_Seq{seq}_{Type}_PCK10.p"), "rb"))
+            pck05 = pickle.load(open(os.path.join(EvalDir, f"{model}_Seq{seq}_{Type}_PCK05.p"), "rb"))
+
+            kp_e, all_e = RMSESummaryDict(euc)
+            kp_10, all_10 = PCKSummaryDict(pck10)
+            kp_05, all_05 = PCKSummaryDict(pck05)
+
+            EucDFDict[counter] = {"Model": model, "Seq": seq, "Overall": GetRMSE(all_e), **{k:GetRMSE(v) for k,v in kp_e.items()}}
+            MedianDFDict[counter] = {"Model": model, "Seq": seq, "Overall": GetMedian(all_e), **{k:GetMedian(v) for k,v in kp_e.items()}}
+            PCK10DFDict[counter] = {"Model": model, "Seq": seq, "Overall": GetPCKSum(all_10), **{k:GetPCKSum(v) for k,v in kp_10.items()}}
+            PCK05DFDict[counter] = {"Model": model, "Seq": seq, "Overall": GetPCKSum(all_05), **{k:GetPCKSum(v) for k,v in kp_05.items()}}
+            counter += 1
+
+    out_dir = os.path.join(EvalDir, "Seq_EvaluationSummary")
+    pd.DataFrame.from_dict(EucDFDict, orient="index").to_csv(os.path.join(out_dir, f"Ind_EucErrorSummary{Type}.csv"))
+    pd.DataFrame.from_dict(PCK10DFDict, orient="index").to_csv(os.path.join(out_dir, f"Ind_PCK10Summary{Type}.csv"))
+    pd.DataFrame.from_dict(PCK05DFDict, orient="index").to_csv(os.path.join(out_dir, f"Ind_PCK05Summary{Type}.csv"))
+    pd.DataFrame.from_dict(MedianDFDict, orient="index").to_csv(os.path.join(out_dir, f"Ind_MedianSummary{Type}.csv"))
     
-    if not(ModelName == "ltohp" or ModelName == "MvP"):
-        GetSummaryCSV(EvalDir,Models2D,AllSequences, Type = "2D")
-        GetIndNumSummaryCSV(EvalDir,Models2D,AllSequences, Type = "2D")
-    
-    
 
-if __name__ == "__main__":
-    EvalDir = "/media/alexchan/Extreme SSD/WorkDir/Pigeon3DTrack/SeqEvaluation"
-    DatasetPath = "/media/alexchan/My Passport/Dataset_3DPOP"
-    ###Get summary Data Frames
-    Models3D = ["YOLOVit","KPRCNNSingle","YOLOPose","YOLODLC","KPRCNN","ltohp"]
-    Models2D = ["YOLOVit","KPRCNNSingle","YOLOPose","YOLODLC","KPRCNN"]
-    AllSequences = [11,1,2,5] #
-    
-    runEvaluation(EvalDir,DatasetPath, Models3D, Models2D, AllSequences)
+# ---------------------------------------------------------------------
+# Driver
+# ---------------------------------------------------------------------
 
-    ###Get Per individual Num summary
+def runEvaluation(EvalDir, DatasetPath, Models3D, Models2D, Seqs):
+    print("Evaluating...")
+    os.makedirs(os.path.join(EvalDir, "Seq_EvaluationSummary"), exist_ok=True)
+    files = [f for f in os.listdir(EvalDir) if "Kalman3D" in f]
+    for f in files:
+        _, _, model, seq = f.split("_")
+        seq = seq.split(".")[0].replace("Seq","")
+        preds3d = pickle.load(open(os.path.join(EvalDir, f), "rb"))
+        if model not in Models2D:
+            e3d, p103d, p053d, _, _, _ = DoEval(DatasetPath, seq, preds3d)
+            pickle.dump(e3d, open(os.path.join(EvalDir, f"{model}_Seq{seq}_3D_EucError.p"), "wb"))
+            pickle.dump(p103d, open(os.path.join(EvalDir, f"{model}_Seq{seq}_3D_PCK10.p"), "wb"))
+            pickle.dump(p053d, open(os.path.join(EvalDir, f"{model}_Seq{seq}_3D_PCK05.p"), "wb"))
+            continue
+        preds2d = pickle.load(open(os.path.join(EvalDir, f"SeqEval_Points2D_{model}_Seq{seq}.p"), "rb"))
+        e3d, p103d, p053d, e2d, p102d, p052d = DoEval(DatasetPath, seq, preds3d, preds2d)
+        pickle.dump(e3d, open(os.path.join(EvalDir, f"{model}_Seq{seq}_3D_EucError.p"), "wb"))
+        pickle.dump(p103d, open(os.path.join(EvalDir, f"{model}_Seq{seq}_3D_PCK10.p"), "wb"))
+        pickle.dump(p053d, open(os.path.join(EvalDir, f"{model}_Seq{seq}_3D_PCK05.p"), "wb"))
+        pickle.dump(e2d, open(os.path.join(EvalDir, f"{model}_Seq{seq}_2D_EucError.p"), "wb"))
+        pickle.dump(p102d, open(os.path.join(EvalDir, f"{model}_Seq{seq}_2D_PCK10.p"), "wb"))
+        pickle.dump(p052d, open(os.path.join(EvalDir, f"{model}_Seq{seq}_2D_PCK05.p"), "wb"))
 
+    GetSummaryCSV(EvalDir, Models3D, Seqs, Type="3D")
+    GetIndNumSummaryCSV(EvalDir,Models3D,Seqs, Type = "3D")
+    GetSummaryCSV(EvalDir, Models2D, Seqs, Type="2D")
+    GetIndNumSummaryCSV(EvalDir,Models2D,Seqs, Type = "2D")
 
-
-    # for file3d in Files3D:
-    #     _, _, ModelName, SeqNum= file3d.split("_")
-    #     SeqNum = SeqNum.split(".")[0].split("Seq")[1]
-    #     if ModelName == "ltohp":
-    #         continue
-
-    #     print("Seq: %s, Model: %s"%(SeqNum,ModelName))
-
-    #     EucErrorList3D = pickle.load(open(os.path.join(EvalDir,"%s_Seq%s_3D_EucError.p"%(ModelName,SeqNum)),"rb"))
-    #     PCK10List3D = pickle.load(open(os.path.join(EvalDir,"%s_Seq%s_3D_PCK10.p"%(ModelName,SeqNum)),"rb"))
-    #     PCK05List3D = pickle.load(open(os.path.join(EvalDir,"%s_Seq%s_3D_PCK05.p"%(ModelName,SeqNum)),"rb"))
-
-    #     EucErrorList2D = pickle.load(open(os.path.join(EvalDir,"%s_Seq%s_2D_EucError.p"%(ModelName,SeqNum)),"rb"))
-    #     PCK10List2D = pickle.load(open(os.path.join(EvalDir,"%s_Seq%s_2D_PCK10.p"%(ModelName,SeqNum)),"rb"))
-    #     PCK05List2D = pickle.load(open(os.path.join(EvalDir,"%s_Seq%s_2D_PCK05.p"%(ModelName,SeqNum)),"rb"))
-
-    #     print("RMSE")
-    #     RMSESummary(EucErrorList3D,PIGEON_KEYPOINT_NAMES)
-    #     print("PCK10")
-    #     PCKSummary(PCK10List3D, PIGEON_KEYPOINT_NAMES)
-    #     print("PCK05")
-    #     PCKSummary(PCK05List3D, PIGEON_KEYPOINT_NAMES)
-
-
+# ---------------------------------------------------------------------

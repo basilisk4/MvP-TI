@@ -6,7 +6,7 @@ BACKBONE_MODEL: 'pose_resnet'
 MODEL: 'multi_person_posenet'
 DATA_DIR: ''
 GPUS: '1,2,3,4'
-OUTPUT_DIR: 'output'
+OUTPUT_DIR: 'output-seg'
 LOG_DIR: 'log'
 WORKERS: 4
 PRINT_FREQ: 100
@@ -16,7 +16,7 @@ DATASET:
   TRAIN_DATASET: 'pop3d'
   TEST_DATASET: 'pop3d'
   DATA_FORMAT: jpg
-  ROOT: 'data/pop3d'
+  ROOT: 'data/pop3d-seg'
   TEST_SUBSET: 'validation'
   TRAIN_SUBSET: 'train'
   ROOTIDX: 6
@@ -26,8 +26,8 @@ NETWORK:
   PRETRAINED:  ''
   TARGET_TYPE: gaussian
   IMAGE_SIZE:
-  - 2880
-  - 1620
+  - 1280
+  - 720
   NUM_JOINTS: 9
 POSE_RESNET:
   FINAL_CONV_KERNEL: 1
